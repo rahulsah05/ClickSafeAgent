@@ -48,6 +48,18 @@ class FakeReputationAnalyzer:
         ]
 
 
+class ExplodingReputationAnalyzer:
+    evidence_category = EvidenceCategory.REPUTATION
+
+    @property
+    def name(self) -> str:
+        return "exploding_reputation"
+
+    async def analyze(self, context: UrlAnalysisContext) -> list[EvidenceItem]:
+        _ = context
+        raise RuntimeError("provider integration failed")
+
+
 @pytest.fixture(autouse=True)
 def fake_browser_capture(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     async def capture(
@@ -85,7 +97,7 @@ def fake_browser_capture(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     )
 
 
-def test_analyze_creates_completed_phase_three_job(client: TestClient) -> None:
+def test_analyze_creates_completed_phase_five_job(client: TestClient) -> None:
     response = client.post("/api/v1/analyze", json={"url": "HTTPS://Example.COM:443/a#frag"})
 
     assert response.status_code == 200
@@ -108,6 +120,24 @@ def test_analyze_creates_completed_phase_three_job(client: TestClient) -> None:
         "running",
         "completed",
     ]
+
+
+def test_analyze_keeps_unexpected_reputation_failures_in_reputation_evidence(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "clicksafe.application.services.analysis_service.create_default_analyzers",
+        lambda: [ExplodingReputationAnalyzer()],
+    )
+
+    response = client.post("/api/v1/analyze", json={"url": "example.com"})
+
+    assert response.status_code == 200
+    evidence = response.json()["evidence"]
+    assert evidence["technical_analysis"] == []
+    assert evidence["reputation"][0]["source"] == "exploding_reputation"
+    assert evidence["reputation"][0]["category"] == "reputation"
 
 
 def test_analyze_persists_failed_policy_validation(client: TestClient) -> None:

@@ -264,10 +264,13 @@ class AnalysisService:
         try:
             return await analyzer.analyze(context)
         except Exception as exc:
+            category = getattr(analyzer, "evidence_category", EvidenceCategory.TECHNICAL)
+            if not isinstance(category, EvidenceCategory):
+                category = EvidenceCategory.TECHNICAL
             return [
                 EvidenceItem(
                     source=analyzer.name,
-                    category=EvidenceCategory.TECHNICAL,
+                    category=category,
                     severity=EvidenceSeverity.LOW,
                     title=f"{analyzer.name} analyzer failed",
                     description="Analyzer execution failed and was isolated from the scan.",

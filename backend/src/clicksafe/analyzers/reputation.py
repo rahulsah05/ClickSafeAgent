@@ -17,6 +17,8 @@ class ReputationClient(Protocol):
 
 
 class ReputationAnalyzer:
+    evidence_category = EvidenceCategory.REPUTATION
+
     def __init__(
         self,
         virustotal_client: ReputationClient | None = None,
@@ -40,8 +42,8 @@ class ReputationAnalyzer:
             self._lookup(self._google_safe_browsing_client, url),
         )
 
-        vt_malicious = int(virustotal_result.get("malicious") or 0)
-        vt_suspicious = int(virustotal_result.get("suspicious") or 0)
+        vt_malicious = self._positive_count(virustotal_result, "malicious")
+        vt_suspicious = self._positive_count(virustotal_result, "suspicious")
         google_listed = bool(safe_browsing_result.get("listed"))
         severity = EvidenceSeverity.INFO
         if google_listed or vt_malicious:
@@ -70,6 +72,11 @@ class ReputationAnalyzer:
     async def _lookup(self, client: ReputationClient, url: str) -> dict[str, Any]:
         try:
             return await client.lookup_url(url)
+        except httpx.TimeoutException:
+            return {
+                "enabled": True,
+                "error": "timeout",
+            }
         except httpx.HTTPStatusError as exc:
             return {
                 "enabled": True,
@@ -82,3 +89,15 @@ class ReputationAnalyzer:
                 "error": "http_error",
                 "reason": type(exc).__name__,
             }
+        except Exception as exc:
+            return {
+                "enabled": True,
+                "error": "unexpected_error",
+                "reason": type(exc).__name__,
+            }
+
+    def _positive_count(self, result: dict[str, Any], key: str) -> int:
+        value = result.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+        return 0

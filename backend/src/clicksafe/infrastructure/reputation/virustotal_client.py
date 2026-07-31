@@ -9,8 +9,14 @@ from clicksafe.core.config import Settings, get_settings
 class VirusTotalClient:
     base_url = "https://www.virustotal.com/api/v3"
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._settings = settings or get_settings()
+        self._transport = transport
 
     async def lookup_url(self, url: str) -> dict[str, Any]:
         if not self._settings.virustotal_api_key:
@@ -18,7 +24,10 @@ class VirusTotalClient:
 
         url_id = self._url_identifier(url)
         headers = {"x-apikey": self._settings.virustotal_api_key}
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(
+            timeout=self._settings.reputation_timeout_seconds,
+            transport=self._transport,
+        ) as client:
             response = await client.get(f"{self.base_url}/urls/{url_id}", headers=headers)
 
         if response.status_code == 404:
@@ -30,9 +39,20 @@ class VirusTotalClient:
             }
 
         response.raise_for_status()
-        body = response.json()
-        attributes = body.get("data", {}).get("attributes", {})
-        stats = attributes.get("last_analysis_stats", {})
+        body = self._json_object(response)
+        data = body.get("data") if body is not None else None
+        attributes = data.get("attributes") if isinstance(data, dict) else None
+        if not isinstance(attributes, dict):
+            return {
+                "enabled": True,
+                "found": None,
+                "url_id": url_id,
+                "error": "invalid_response",
+            }
+
+        stats = attributes.get("last_analysis_stats")
+        if not isinstance(stats, dict):
+            stats = {}
         return {
             "enabled": True,
             "found": True,
@@ -40,11 +60,24 @@ class VirusTotalClient:
             "reputation": attributes.get("reputation"),
             "last_analysis_date": attributes.get("last_analysis_date"),
             "last_analysis_stats": stats,
-            "malicious": int(stats.get("malicious") or 0),
-            "suspicious": int(stats.get("suspicious") or 0),
-            "harmless": int(stats.get("harmless") or 0),
-            "undetected": int(stats.get("undetected") or 0),
+            "malicious": self._stat_count(stats, "malicious"),
+            "suspicious": self._stat_count(stats, "suspicious"),
+            "harmless": self._stat_count(stats, "harmless"),
+            "undetected": self._stat_count(stats, "undetected"),
         }
 
     def _url_identifier(self, url: str) -> str:
         return base64.urlsafe_b64encode(url.encode("utf-8")).decode("ascii").rstrip("=")
+
+    def _json_object(self, response: httpx.Response) -> dict[str, Any] | None:
+        try:
+            body = response.json()
+        except ValueError:
+            return None
+        return body if isinstance(body, dict) else None
+
+    def _stat_count(self, stats: dict[str, Any], key: str) -> int:
+        value = stats.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return 0

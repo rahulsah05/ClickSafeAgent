@@ -51,8 +51,8 @@ Status: complete.
 
 - Added VirusTotal API v3 URL report client using `VIRUSTOTAL_API_KEY`.
 - Added Google Safe Browsing v4 lookup client using `GOOGLE_SAFE_BROWSING_API_KEY`.
-- Added timeout, HTTP error, and missing-key behavior.
-- Added mocked tests for reputation analyzer behavior and missing-key clients.
+- Added configurable timeout, HTTP error, malformed-response, and missing-key behavior.
+- Added mocked request-contract tests and provider-failure isolation coverage.
 
 ## Phase 6 - AI Verdict
 

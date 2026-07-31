@@ -46,4 +46,6 @@ ClickSafe follows a clean architecture layout. The dependency direction should p
 ## Reputation Sources
 
 - VirusTotal uses API v3 `GET /api/v3/urls/{id}`, where `{id}` is the URL-safe base64 representation of the URL without padding.
-- Google Safe Browsing uses the v4 `POST /v4/threatMatches:find` lookup endpoint.
+- Google Safe Browsing uses the v4 `POST /v4/threatMatches:find` lookup endpoint. It is intended for non-commercial use; commercial deployments should use Google Web Risk.
+- Each provider uses `REPUTATION_TIMEOUT_SECONDS`; provider failures and malformed responses are preserved as provider-specific evidence so one unavailable service does not discard the other result.
+- Enabled providers receive the browser's final URL. URLs containing sensitive query tokens should be treated as a third-party disclosure.

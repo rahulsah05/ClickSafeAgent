@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     virustotal_api_key: str = ""
     google_safe_browsing_api_key: str = ""
+    reputation_timeout_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
 
     playwright_headless: bool = True
     browser_timeout_ms: int = Field(default=15_000, ge=1_000, le=120_000)
