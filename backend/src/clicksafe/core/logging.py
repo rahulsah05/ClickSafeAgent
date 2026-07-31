@@ -1,0 +1,14 @@
+import logging
+import sys
+
+
+def configure_logging(log_level: str) -> None:
+    if logging.getLogger().handlers:
+        return
+
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+

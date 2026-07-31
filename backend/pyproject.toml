@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "clicksafe-backend"
+version = "0.1.0"
+description = "FastAPI backend for AI-powered phishing detection."
+readme = "README.md"
+requires-python = ">=3.12,<3.15"
+authors = [{ name = "ClickSafe" }]
+dependencies = [
+  "fastapi>=0.116.0",
+  "uvicorn[standard]>=0.35.0",
+  "pydantic>=2.11.0",
+  "pydantic-settings>=2.10.0",
+  "SQLAlchemy[asyncio]>=2.0.40",
+  "aiosqlite>=0.21.0",
+  "httpx>=0.28.0",
+  "playwright>=1.54.0",
+  "openai>=1.97.0",
+  "beautifulsoup4>=4.13.0",
+  "dnspython>=2.7.0",
+  "python-whois>=0.9.5",
+  "tldextract>=5.3.0",
+  "cryptography>=45.0.0",
+  "python-dotenv>=1.1.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.4.0",
+  "pytest-asyncio>=1.0.0",
+  "pytest-cov>=6.2.0",
+  "ruff>=0.12.0",
+  "mypy>=1.16.0"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/clicksafe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = []
+

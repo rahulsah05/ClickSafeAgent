@@ -1,0 +1,49 @@
+# Architecture
+
+ClickSafe follows a clean architecture layout. The dependency direction should point inward: API and infrastructure depend on application services, application services depend on domain models, and domain models do not depend on frameworks.
+
+## Backend Layers
+
+- `domain`: framework-free entities, enums, and evidence contracts.
+- `application`: orchestration services and use cases.
+- `analyzers`: focused phishing evidence analyzers, one concern per file.
+- `infrastructure`: Playwright, database, OpenAI, and reputation-service adapters.
+- `api`: FastAPI routes, schemas, and dependency wiring.
+- `core`: configuration, logging, and shared runtime settings.
+
+## Frontend Layers
+
+- `components`: reusable dashboard UI modules.
+- `lib`: API clients and utility code.
+- `types`: shared TypeScript contracts.
+
+## Planned Analysis Flow
+
+1. Validate and normalize the submitted URL.
+2. Create an analysis record in SQLite.
+3. Visit the URL through an isolated Playwright browser context.
+4. Capture redirects, final URL, screenshot, and HTML.
+5. Run technical analyzers concurrently where safe.
+6. Query reputation services when API keys are present.
+7. Send the evidence bundle to the OpenAI Responses API.
+8. Persist and return the final verdict payload.
+
+## Implemented Phase 5 Flow
+
+1. Accept a submitted URL string.
+2. Persist a requested analysis job.
+3. Normalize HTTP/HTTPS URLs, remove fragments, lowercase hostnames, remove default ports, and add HTTPS to bare domains.
+4. Mark the job running with initial lifecycle evidence.
+5. Visit the normalized URL in a fresh Playwright Chromium browser context.
+6. Observe redirects and record the final page URL and response status.
+7. Save a full-page screenshot artifact.
+8. Save an HTML artifact with configured byte limits and truncation metadata.
+9. Run technical analyzers for redirects, HTML structure, metadata, forms, JavaScript, DNS, SSL, and WHOIS.
+10. Run reputation checks against VirusTotal and Google Safe Browsing when API keys are configured.
+11. Mark the job completed with validation, browser, technical, and reputation evidence, or failed when URL policy validation or browser navigation rejects the URL.
+12. Return and persist the job payload for later retrieval.
+
+## Reputation Sources
+
+- VirusTotal uses API v3 `GET /api/v3/urls/{id}`, where `{id}` is the URL-safe base64 representation of the URL without padding.
+- Google Safe Browsing uses the v4 `POST /v4/threatMatches:find` lookup endpoint.

@@ -1,0 +1,240 @@
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
+  FileSearch,
+  ShieldQuestion,
+  XCircle
+} from "lucide-react";
+
+import type { AnalysisResponse, AnalysisStatus, Verdict } from "../types/analysis";
+
+interface ResultPanelProps {
+  error: string | null;
+  isLoading: boolean;
+  result: AnalysisResponse | null;
+}
+
+const verdictStyles: Record<Verdict, string> = {
+  Safe: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300",
+  Suspicious: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-300",
+  Malicious: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+};
+
+const statusStyles: Record<AnalysisStatus, string> = {
+  requested:
+    "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-300",
+  running:
+    "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300",
+  completed:
+    "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300",
+  failed:
+    "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+};
+
+export function ResultPanel({ error, isLoading, result }: ResultPanelProps) {
+  return (
+    <section className="min-h-[440px] rounded-lg border border-zinc-200 bg-white p-5 shadow-soft dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="mb-5 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold tracking-normal">Verdict</h2>
+          <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Risk score and evidence</p>
+        </div>
+        <FileSearch aria-hidden="true" className="text-zinc-400" size={22} />
+      </div>
+
+      {isLoading ? <LoadingState /> : null}
+      {!isLoading && error ? <ErrorState message={error} /> : null}
+      {!isLoading && !error && result ? <VerdictState result={result} /> : null}
+      {!isLoading && !error && !result ? <EmptyState /> : null}
+    </section>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-200 bg-slate-50 p-6 text-center dark:border-zinc-800 dark:bg-zinc-950">
+      <ShieldQuestion aria-hidden="true" className="mb-3 text-zinc-400" size={34} />
+      <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">Awaiting scan</p>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-zinc-200 bg-slate-50 p-6 text-center dark:border-zinc-800 dark:bg-zinc-950">
+      <Clock3 aria-hidden="true" className="mb-3 animate-pulse text-emerald-500" size={34} />
+      <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">Scanning</p>
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+      <div className="flex gap-3">
+        <AlertTriangle aria-hidden="true" className="mt-0.5 shrink-0" size={18} />
+        <p className="text-sm leading-6">{message}</p>
+      </div>
+    </div>
+  );
+}
+
+function VerdictState({ result }: { result: AnalysisResponse }) {
+  const badgeLabel = result.verdict ?? titleCase(result.status);
+  const badgeClass = result.verdict ? verdictStyles[result.verdict] : statusStyles[result.status];
+  const BadgeIcon = result.status === "failed" ? XCircle : CheckCircle2;
+  const validation = getRecord(result.evidence.validation);
+  const browser = getRecord(result.evidence.browser);
+  const technicalAnalysis = getRecordArray(result.evidence.technical_analysis);
+  const reputation = getRecordArray(result.evidence.reputation);
+  const pendingCapabilities = Array.isArray(result.evidence.pending_capabilities)
+    ? result.evidence.pending_capabilities
+    : [];
+
+  return (
+    <div className="space-y-5">
+      <div
+        className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-semibold ${badgeClass}`}
+      >
+        <BadgeIcon aria-hidden="true" size={18} />
+        {badgeLabel}
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between text-sm">
+          <span className="font-medium text-zinc-600 dark:text-zinc-300">Risk score</span>
+          <span className="font-semibold">
+            {result.risk_score === null ? "Pending" : `${result.risk_score}/100`}
+          </span>
+        </div>
+        <div className="h-3 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+          <div
+            className="h-full rounded-full bg-emerald-500 transition-all"
+            style={{ width: `${result.risk_score ?? 0}%` }}
+          />
+        </div>
+      </div>
+
+      <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+        {result.error_message ?? result.explanation}
+      </p>
+
+      <dl className="grid gap-x-5 gap-y-3 border-t border-zinc-200 pt-4 text-sm dark:border-zinc-800 sm:grid-cols-2">
+        <InfoRow label="Submitted" value={result.submitted_url} />
+        <InfoRow label="Normalized" value={result.normalized_url ?? "Not available"} />
+        <InfoRow label="Job ID" value={result.id} />
+        <InfoRow label="Completed" value={formatDate(result.completed_at)} />
+      </dl>
+
+      {validation ? (
+        <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold tracking-normal">Validation Evidence</h3>
+          <div className="mt-3 grid gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:grid-cols-2">
+            <span>Host: {String(validation.hostname ?? "n/a")}</span>
+            <span>Scheme: {String(validation.scheme ?? "n/a")}</span>
+            <span>Valid: {String(validation.valid ?? false)}</span>
+            <span>Fragment removed: {String(validation.fragment_removed ?? false)}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {browser ? (
+        <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold tracking-normal">Browser Capture</h3>
+          <div className="mt-3 grid gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:grid-cols-2">
+            <span>Captured: {String(browser.captured ?? false)}</span>
+            <span>Status: {formatUnknown(browser.status_code)}</span>
+            <span className="break-words">Final URL: {formatUnknown(browser.final_url)}</span>
+            <span>Redirects: {formatUnknown(browser.redirect_count)}</span>
+            <span className="break-words">HTML: {formatUnknown(browser.html_path)}</span>
+            <span className="break-words">Screenshot: {formatUnknown(browser.screenshot_path)}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {technicalAnalysis.length > 0 ? (
+        <EvidenceList title="Technical Analyzers" items={technicalAnalysis} />
+      ) : null}
+
+      {reputation.length > 0 ? <EvidenceList title="Reputation" items={reputation} /> : null}
+
+      {pendingCapabilities.length > 0 ? (
+        <p className="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-500">
+          {pendingCapabilities.length} capability queued for later phases
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function EvidenceList({ items, title }: { items: Array<Record<string, unknown>>; title: string }) {
+  return (
+    <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <h3 className="text-sm font-semibold tracking-normal">{title}</h3>
+      <div className="mt-3 space-y-3">
+        {items.map((item) => (
+          <div className="border-l-2 border-zinc-200 pl-3 dark:border-zinc-700" key={String(item.source)}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                {formatUnknown(item.title)}
+              </span>
+              <span className="rounded-md bg-zinc-100 px-2 py-1 text-xs font-semibold uppercase text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                {formatUnknown(item.severity)}
+              </span>
+            </div>
+            <p className="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+              {formatUnknown(item.description)}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="mb-1 text-xs font-semibold uppercase text-zinc-500 dark:text-zinc-500">
+        {label}
+      </dt>
+      <dd className="break-words text-zinc-700 dark:text-zinc-200">{value}</dd>
+    </div>
+  );
+}
+
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return "Not complete";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(new Date(value));
+}
+
+function getRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function getRecordArray(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is Record<string, unknown> => getRecord(item) !== null);
+}
+
+function formatUnknown(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "n/a";
+  }
+  return String(value);
+}
