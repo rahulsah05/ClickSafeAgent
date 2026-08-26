@@ -45,6 +45,14 @@ ClickSafe follows a clean architecture layout. The dependency direction should p
 13. Mark the job completed with validation, browser, technical, reputation, and AI evidence, or failed when URL policy validation or browser navigation rejects the URL.
 14. Return and persist the job payload for later retrieval.
 
+## Implemented Phase 7 Dashboard
+
+1. The React dashboard submits URLs to `POST /api/v1/analyze` and renders the returned job payload.
+2. It presents verdict, risk score, validation, browser, AI, technical, and reputation evidence in responsive light and dark layouts.
+3. Browser redirect responses are displayed in order, along with the final destination.
+4. Captured screenshots are loaded through the analysis-scoped screenshot API rather than exposing a filesystem path.
+5. Network failures and failed analysis jobs offer a retry using the previously submitted URL.
+
 ## AI Verdict Source
 
 - OpenAI Responses API requests use `responses.create`.

@@ -33,13 +33,15 @@ export function UrlScanner({ isLoading, onScan }: UrlScannerProps) {
           URL
         </label>
         <input
+          autoCapitalize="none"
           className="min-h-12 rounded-lg border border-zinc-200 bg-slate-50 px-4 text-base text-zinc-950 outline-none transition placeholder:text-zinc-400 focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/15 dark:border-zinc-800 dark:bg-zinc-950 dark:text-slate-50 dark:focus:bg-zinc-950"
           id="url"
           inputMode="url"
           onChange={(event) => setUrl(event.target.value)}
           placeholder="https://example.com"
           required
-          type="url"
+          spellCheck={false}
+          type="text"
           value={url}
         />
         <button

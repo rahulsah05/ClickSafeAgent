@@ -66,11 +66,13 @@ Status: complete.
 
 ## Phase 7 - Dashboard Experience
 
-- Wire frontend to backend analysis endpoint.
-- Display verdict, score, screenshot, redirect trail, and evidence groups.
-- Add loading, failure, and retry states.
-- Polish mobile layout and dark mode.
-- Add frontend component tests.
+Status: complete.
+
+- Wired the frontend to the backend analysis endpoint.
+- Displayed verdicts, scores, captured screenshots, redirect trails, and evidence groups.
+- Added loading, failure, screenshot-unavailable, and retry states.
+- Polished the responsive mobile layout and dark mode.
+- Added frontend component coverage for successful scans and retry behavior.
 
 ## Phase 8 - Hardening
 

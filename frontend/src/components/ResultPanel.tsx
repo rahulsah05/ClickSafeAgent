@@ -3,15 +3,19 @@ import {
   CheckCircle2,
   Clock3,
   FileSearch,
+  RotateCcw,
   ShieldQuestion,
   XCircle
 } from "lucide-react";
+import { useState } from "react";
 
+import { getAnalysisScreenshotUrl } from "../lib/api";
 import type { AnalysisResponse, AnalysisStatus, Verdict } from "../types/analysis";
 
 interface ResultPanelProps {
   error: string | null;
   isLoading: boolean;
+  onRetry: () => void;
   result: AnalysisResponse | null;
 }
 
@@ -38,7 +42,7 @@ const statusStyles: Record<AnalysisStatus, string> = {
     "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
 };
 
-export function ResultPanel({ error, isLoading, result }: ResultPanelProps) {
+export function ResultPanel({ error, isLoading, onRetry, result }: ResultPanelProps) {
   return (
     <section className="min-h-[440px] rounded-lg border border-zinc-200 bg-white p-5 shadow-soft dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-5 flex items-center justify-between gap-3">
@@ -50,8 +54,8 @@ export function ResultPanel({ error, isLoading, result }: ResultPanelProps) {
       </div>
 
       {isLoading ? <LoadingState /> : null}
-      {!isLoading && error ? <ErrorState message={error} /> : null}
-      {!isLoading && !error && result ? <VerdictState result={result} /> : null}
+      {!isLoading && error ? <ErrorState message={error} onRetry={onRetry} /> : null}
+      {!isLoading && !error && result ? <VerdictState onRetry={onRetry} result={result} /> : null}
       {!isLoading && !error && !result ? <EmptyState /> : null}
     </section>
   );
@@ -68,25 +72,35 @@ function EmptyState() {
 
 function LoadingState() {
   return (
-    <div className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-zinc-200 bg-slate-50 p-6 text-center dark:border-zinc-800 dark:bg-zinc-950">
+    <div
+      aria-live="polite"
+      className="flex min-h-[320px] flex-col items-center justify-center rounded-lg border border-zinc-200 bg-slate-50 p-6 text-center dark:border-zinc-800 dark:bg-zinc-950"
+      role="status"
+    >
       <Clock3 aria-hidden="true" className="mb-3 animate-pulse text-emerald-500" size={34} />
       <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">Scanning</p>
     </div>
   );
 }
 
-function ErrorState({ message }: { message: string }) {
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+    <div
+      className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+      role="alert"
+    >
       <div className="flex gap-3">
         <AlertTriangle aria-hidden="true" className="mt-0.5 shrink-0" size={18} />
-        <p className="text-sm leading-6">{message}</p>
+        <div>
+          <p className="text-sm leading-6">{message}</p>
+          <RetryButton onRetry={onRetry} />
+        </div>
       </div>
     </div>
   );
 }
 
-function VerdictState({ result }: { result: AnalysisResponse }) {
+function VerdictState({ onRetry, result }: { onRetry: () => void; result: AnalysisResponse }) {
   const badgeLabel = result.verdict ?? titleCase(result.status);
   const badgeClass = result.verdict ? verdictStyles[result.verdict] : statusStyles[result.status];
   const BadgeIcon = result.status === "failed" ? XCircle : CheckCircle2;
@@ -95,9 +109,11 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
   const ai = getRecord(result.evidence.ai);
   const technicalAnalysis = getRecordArray(result.evidence.technical_analysis);
   const reputation = getRecordArray(result.evidence.reputation);
+  const redirects = getRecordArray(browser?.redirects);
   const pendingCapabilities = Array.isArray(result.evidence.pending_capabilities)
     ? result.evidence.pending_capabilities
     : [];
+  const screenshotUrl = browser?.captured === true ? getAnalysisScreenshotUrl(result.id) : null;
 
   return (
     <div className="space-y-5">
@@ -125,9 +141,12 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
         </div>
       </div>
 
-      <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-300">
-        {result.error_message ?? result.explanation}
-      </p>
+      <div>
+        <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          {result.error_message ?? result.explanation}
+        </p>
+        {result.status === "failed" ? <RetryButton onRetry={onRetry} /> : null}
+      </div>
 
       <dl className="grid gap-x-5 gap-y-3 border-t border-zinc-200 pt-4 text-sm dark:border-zinc-800 sm:grid-cols-2">
         <InfoRow label="Submitted" value={result.submitted_url} />
@@ -156,9 +175,12 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
             <span>Status: {formatUnknown(browser.status_code)}</span>
             <span className="break-words">Final URL: {formatUnknown(browser.final_url)}</span>
             <span>Redirects: {formatUnknown(browser.redirect_count)}</span>
-            <span className="break-words">HTML: {formatUnknown(browser.html_path)}</span>
-            <span className="break-words">Screenshot: {formatUnknown(browser.screenshot_path)}</span>
+            <span>HTML size: {formatBytes(browser.html_size_bytes)}</span>
+            <span>HTML truncated: {String(browser.html_truncated ?? false)}</span>
           </div>
+
+          <RedirectTrail finalUrl={browser.final_url} redirects={redirects} />
+          {screenshotUrl ? <ScreenshotPreview src={screenshotUrl} /> : null}
         </div>
       ) : null}
 
@@ -176,6 +198,86 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
         </p>
       ) : null}
     </div>
+  );
+}
+
+function RetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <button
+      className="mt-3 inline-flex min-h-10 items-center gap-2 rounded-lg border border-current px-3 py-2 text-sm font-semibold transition hover:bg-amber-100/70 dark:hover:bg-amber-900/30"
+      onClick={onRetry}
+      type="button"
+    >
+      <RotateCcw aria-hidden="true" size={16} />
+      Retry scan
+    </button>
+  );
+}
+
+function RedirectTrail({
+  finalUrl,
+  redirects
+}: {
+  finalUrl: unknown;
+  redirects: Array<Record<string, unknown>>;
+}) {
+  return (
+    <div className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <h4 className="text-sm font-semibold tracking-normal">Redirect Trail</h4>
+      {redirects.length > 0 ? (
+        <ol className="mt-3 space-y-3">
+          {redirects.map((redirect, index) => (
+            <li
+              className="border-l-2 border-zinc-200 pl-3 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-300"
+              key={`${String(redirect.url)}-${index}`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-zinc-800 dark:text-zinc-100">Step {index + 1}</span>
+                <span className="rounded-md bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                  HTTP {formatUnknown(redirect.status_code)}
+                </span>
+              </div>
+              <p className="mt-1 break-words">{formatUnknown(redirect.url)}</p>
+              {redirect.location ? (
+                <p className="mt-1 break-words text-zinc-500 dark:text-zinc-400">
+                  Location: {formatUnknown(redirect.location)}
+                </p>
+              ) : null}
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          No HTTP redirects observed; the page loaded directly.
+        </p>
+      )}
+      <p className="mt-3 break-words text-sm text-zinc-600 dark:text-zinc-300">
+        Final destination: {formatUnknown(finalUrl)}
+      </p>
+    </div>
+  );
+}
+
+function ScreenshotPreview({ src }: { src: string }) {
+  const [failedToLoad, setFailedToLoad] = useState(false);
+
+  return (
+    <figure className="mt-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <figcaption className="text-sm font-semibold tracking-normal">Captured Screenshot</figcaption>
+      {failedToLoad ? (
+        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          The captured screenshot is no longer available.
+        </p>
+      ) : (
+        <img
+          alt="Captured page screenshot"
+          className="mt-3 max-h-[32rem] w-full rounded-lg border border-zinc-200 bg-slate-50 object-contain object-top dark:border-zinc-800 dark:bg-zinc-950"
+          loading="lazy"
+          onError={() => setFailedToLoad(true)}
+          src={src}
+        />
+      )}
+    </figure>
   );
 }
 
@@ -289,4 +391,14 @@ function formatPercent(value: unknown) {
     return "n/a";
   }
   return `${Math.round(value * 100)}%`;
+}
+
+function formatBytes(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "n/a";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  return `${Math.round((value / 1024) * 10) / 10} KB`;
 }

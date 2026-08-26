@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from clicksafe.core.config import get_settings
 from clicksafe.domain.analysis import UrlAnalysisContext
 from clicksafe.domain.enums import EvidenceSeverity
 from clicksafe.domain.evidence import EvidenceCategory, EvidenceItem
@@ -62,6 +63,9 @@ class ExplodingReputationAnalyzer:
 
 @pytest.fixture(autouse=True)
 def fake_browser_capture(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.setenv("SCREENSHOT_DIR", str(tmp_path))
+    get_settings.cache_clear()
+
     async def capture(
         self: PlaywrightClient,
         url: str,
@@ -192,6 +196,54 @@ def test_get_analysis_by_id(client: TestClient) -> None:
 
 def test_get_analysis_returns_404_for_missing_job(client: TestClient) -> None:
     response = client.get("/api/v1/analyses/not-a-real-id")
+
+    assert response.status_code == 404
+
+
+def test_get_analysis_screenshot_returns_the_captured_png(client: TestClient) -> None:
+    created_response = client.post("/api/v1/analyze", json={"url": "example.com"})
+    analysis_id = created_response.json()["id"]
+
+    response = client.get(f"/api/v1/analyses/{analysis_id}/screenshot")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content == b"fake-png"
+
+
+def test_get_analysis_screenshot_rejects_a_mismatched_artifact_path(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    async def capture(
+        self: PlaywrightClient,
+        url: str,
+        *,
+        analysis_id: str | None = None,
+    ) -> BrowserCapture:
+        _ = self
+        artifact_id = analysis_id or "test-analysis"
+        html_path = tmp_path / f"{artifact_id}.html"
+        unrelated_screenshot_path = tmp_path / "unrelated.png"
+        html_path.write_text("<html><title>Example</title></html>", encoding="utf-8")
+        unrelated_screenshot_path.write_bytes(b"unrelated-png")
+        return BrowserCapture(
+            final_url=url,
+            redirects=[],
+            status_code=200,
+            html_path=str(html_path),
+            html_size_bytes=34,
+            html_truncated=False,
+            screenshot_path=str(unrelated_screenshot_path),
+        )
+
+    monkeypatch.setattr(PlaywrightClient, "capture", capture)
+
+    created_response = client.post("/api/v1/analyze", json={"url": "example.com"})
+    analysis_id = created_response.json()["id"]
+
+    response = client.get(f"/api/v1/analyses/{analysis_id}/screenshot")
 
     assert response.status_code == 404
 

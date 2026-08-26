@@ -13,12 +13,14 @@ function App() {
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [lastSubmittedUrl, setLastSubmittedUrl] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
   async function handleScan(url: string) {
+    setLastSubmittedUrl(url);
     setIsLoading(true);
     setError(null);
     setResult(null);
@@ -33,6 +35,12 @@ function App() {
     }
   }
 
+  function handleRetry() {
+    if (lastSubmittedUrl) {
+      void handleScan(lastSubmittedUrl);
+    }
+  }
+
   return (
     <Shell
       theme={theme}
@@ -40,7 +48,7 @@ function App() {
     >
       <section className="grid gap-6 xl:grid-cols-[minmax(320px,0.95fr)_minmax(420px,1.35fr)]">
         <UrlScanner isLoading={isLoading} onScan={handleScan} />
-        <ResultPanel error={error} isLoading={isLoading} result={result} />
+        <ResultPanel error={error} isLoading={isLoading} onRetry={handleRetry} result={result} />
       </section>
     </Shell>
   );
