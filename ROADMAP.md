@@ -56,11 +56,13 @@ Status: complete.
 
 ## Phase 6 - AI Verdict
 
-- Build an OpenAI Responses API client.
-- Define a strict JSON schema for AI output.
+Status: complete.
+
+- Built an OpenAI Responses API client.
+- Defined a strict JSON schema for AI output.
 - Send normalized evidence to the model.
-- Return verdict, risk score, explanation, and evidence weighting.
-- Add tests for prompt assembly and schema handling.
+- Return verdict, risk score, explanation, recommendation, confidence, and evidence weighting.
+- Added tests for structured-output request assembly, fallback behavior, and schema handling.
 
 ## Phase 7 - Dashboard Experience
 

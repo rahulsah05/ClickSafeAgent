@@ -11,6 +11,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path) -> TestClient:
     database_path = tmp_path / "clicksafe-test.db"
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
     monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     get_settings.cache_clear()
     reset_database_state()
 

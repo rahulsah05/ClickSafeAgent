@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-5.6"
     openai_reasoning_effort: Literal["minimal", "low", "medium", "high"] = "medium"
+    openai_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
+    openai_max_output_tokens: int = Field(default=1_200, ge=256, le=4_000)
 
     virustotal_api_key: str = ""
     google_safe_browsing_api_key: str = ""

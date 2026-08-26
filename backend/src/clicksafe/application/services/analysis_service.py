@@ -18,8 +18,9 @@ from clicksafe.analyzers.whois import WhoisAnalyzer
 from clicksafe.application.errors import AnalysisNotFoundError, UrlValidationError
 from clicksafe.application.services.url_validation import UrlValidationService
 from clicksafe.domain.analysis import AnalysisJob, UrlAnalysisContext
-from clicksafe.domain.enums import AnalysisStatus, EvidenceSeverity
+from clicksafe.domain.enums import AnalysisStatus, EvidenceSeverity, Verdict
 from clicksafe.domain.evidence import EvidenceCategory, EvidenceItem
+from clicksafe.infrastructure.ai.openai_responses_client import OpenAIResponsesClient
 from clicksafe.infrastructure.browser.playwright_client import (
     BrowserCapture,
     BrowserCaptureError,
@@ -30,6 +31,11 @@ from clicksafe.infrastructure.database.repositories import AnalysisJobRepository
 
 class BrowserCaptureClient(Protocol):
     async def capture(self, url: str, *, analysis_id: str | None = None) -> BrowserCapture:
+        ...
+
+
+class AIVerdictClient(Protocol):
+    async def assess(self, evidence: dict[str, Any]) -> dict[str, Any]:
         ...
 
 
@@ -54,11 +60,13 @@ class AnalysisService:
         url_validation_service: UrlValidationService | None = None,
         browser_client: BrowserCaptureClient | None = None,
         analyzers: Sequence[Analyzer] | None = None,
+        ai_client: AIVerdictClient | None = None,
     ) -> None:
         self._repository = repository
         self._url_validation_service = url_validation_service or UrlValidationService()
         self._browser_client = browser_client or PlaywrightClient()
         self._analyzers = list(analyzers) if analyzers is not None else create_default_analyzers()
+        self._ai_client = ai_client or OpenAIResponsesClient()
 
     async def analyze(self, url: str) -> AnalysisJob:
         job = await self._repository.create(submitted_url=url)
@@ -98,7 +106,7 @@ class AnalysisService:
             )
             analyzer_items = await self._run_analyzers(analysis_context)
 
-            evidence = self._build_phase_five_evidence(
+            evidence = self._build_phase_six_evidence(
                 submitted_url=url,
                 normalized_url=normalized_url_value,
                 scheme=normalized_url.scheme,
@@ -107,15 +115,18 @@ class AnalysisService:
                 browser_capture=browser_capture,
                 analyzer_items=analyzer_items,
             )
+            ai_assessment = await self._assess_evidence(evidence)
+            evidence["ai"] = ai_assessment
+            evidence["pending_capabilities"] = []
+            verdict = Verdict(str(ai_assessment["verdict"]))
+            risk_score = int(ai_assessment["risk_score"])
             completed_job = await self._repository.update(
                 job.id,
                 status=AnalysisStatus.COMPLETED,
+                verdict=verdict,
+                risk_score=risk_score,
                 evidence=evidence,
-                explanation=(
-                    "Phase 5 evidence collection completed. URL validation, browser capture, "
-                    "technical analyzers, and configured reputation checks are active. AI "
-                    "verdict analysis is planned for the next phase."
-                ),
+                explanation=str(ai_assessment["explanation"]),
                 completed_at=datetime.now(UTC),
             )
             if completed_job is None:
@@ -137,7 +148,7 @@ class AnalysisService:
                         "reason": str(exc),
                     },
                     "lifecycle": {
-                        "phase": 5,
+                    "phase": 6,
                         "status": AnalysisStatus.FAILED.value,
                         "transitions": [
                             AnalysisStatus.REQUESTED.value,
@@ -165,7 +176,7 @@ class AnalysisService:
                         "reason": str(exc),
                     },
                     "lifecycle": {
-                        "phase": 5,
+                        "phase": 6,
                         "status": AnalysisStatus.FAILED.value,
                         "transitions": [
                             AnalysisStatus.REQUESTED.value,
@@ -194,13 +205,13 @@ class AnalysisService:
     def _build_running_evidence(self, normalized_url: str) -> dict[str, Any]:
         return {
             "lifecycle": {
-                "phase": 5,
+                "phase": 6,
                 "status": AnalysisStatus.RUNNING.value,
                 "normalized_url": normalized_url,
             }
         }
 
-    def _build_phase_five_evidence(
+    def _build_phase_six_evidence(
         self,
         *,
         submitted_url: str,
@@ -233,7 +244,7 @@ class AnalysisService:
                 "html_truncated": browser_capture.html_truncated,
             },
             "lifecycle": {
-                "phase": 5,
+                "phase": 6,
                 "status": AnalysisStatus.COMPLETED.value,
                 "transitions": [
                     AnalysisStatus.REQUESTED.value,
@@ -249,6 +260,38 @@ class AnalysisService:
             ),
             "pending_capabilities": ["openai_responses_api_verdict"],
         }
+
+    async def _assess_evidence(self, evidence: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await self._ai_client.assess(evidence)
+        except Exception as exc:
+            return {
+                "provider": "openai_responses",
+                "enabled": False,
+                "status": "fallback",
+                "fallback_used": True,
+                "model": None,
+                "response_id": None,
+                "reason": type(exc).__name__,
+                "verdict": Verdict.SUSPICIOUS.value,
+                "risk_score": 55,
+                "confidence": 0.35,
+                "explanation": (
+                    "AI verdict generation failed unexpectedly, so ClickSafe returned a "
+                    "conservative suspicious verdict."
+                ),
+                "recommended_action": (
+                    "Avoid entering credentials or sensitive data unless manually verified."
+                ),
+                "evidence_weights": [
+                    {
+                        "source": "ai_error",
+                        "severity": EvidenceSeverity.MEDIUM.value,
+                        "weight": 55,
+                        "reason": "AI assessment failed during scan completion.",
+                    }
+                ],
+            }
 
     async def _run_analyzers(self, context: UrlAnalysisContext) -> list[EvidenceItem]:
         results = await asyncio.gather(

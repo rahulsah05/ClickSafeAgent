@@ -97,7 +97,7 @@ def fake_browser_capture(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     )
 
 
-def test_analyze_creates_completed_phase_five_job(client: TestClient) -> None:
+def test_analyze_creates_completed_phase_six_job(client: TestClient) -> None:
     response = client.post("/api/v1/analyze", json={"url": "HTTPS://Example.COM:443/a#frag"})
 
     assert response.status_code == 200
@@ -106,15 +106,19 @@ def test_analyze_creates_completed_phase_five_job(client: TestClient) -> None:
     assert payload["status"] == "completed"
     assert payload["submitted_url"] == "HTTPS://Example.COM:443/a#frag"
     assert payload["normalized_url"] == "https://example.com/a"
-    assert payload["verdict"] is None
-    assert payload["risk_score"] is None
+    assert payload["verdict"] == "Safe"
+    assert payload["risk_score"] == 8
     assert payload["evidence"]["validation"]["valid"] is True
     assert payload["evidence"]["browser"]["captured"] is True
     assert payload["evidence"]["browser"]["final_url"] == "https://example.com/a"
     assert payload["evidence"]["browser"]["redirect_count"] == 1
     assert payload["evidence"]["technical_analysis"][0]["source"] == "fake_technical"
     assert payload["evidence"]["reputation"][0]["source"] == "fake_reputation"
-    assert payload["evidence"]["pending_capabilities"] == ["openai_responses_api_verdict"]
+    assert payload["evidence"]["ai"]["provider"] == "openai_responses"
+    assert payload["evidence"]["ai"]["fallback_used"] is True
+    assert payload["evidence"]["ai"]["reason"] == "missing_api_key"
+    assert payload["evidence"]["pending_capabilities"] == []
+    assert payload["evidence"]["lifecycle"]["phase"] == 6
     assert payload["evidence"]["lifecycle"]["transitions"] == [
         "requested",
         "running",

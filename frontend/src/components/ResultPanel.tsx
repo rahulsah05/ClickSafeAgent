@@ -21,6 +21,12 @@ const verdictStyles: Record<Verdict, string> = {
   Malicious: "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
 };
 
+const riskBarStyles: Record<Verdict, string> = {
+  Safe: "bg-emerald-500",
+  Suspicious: "bg-amber-500",
+  Malicious: "bg-red-500"
+};
+
 const statusStyles: Record<AnalysisStatus, string> = {
   requested:
     "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-300",
@@ -86,6 +92,7 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
   const BadgeIcon = result.status === "failed" ? XCircle : CheckCircle2;
   const validation = getRecord(result.evidence.validation);
   const browser = getRecord(result.evidence.browser);
+  const ai = getRecord(result.evidence.ai);
   const technicalAnalysis = getRecordArray(result.evidence.technical_analysis);
   const reputation = getRecordArray(result.evidence.reputation);
   const pendingCapabilities = Array.isArray(result.evidence.pending_capabilities)
@@ -110,7 +117,9 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
         </div>
         <div className="h-3 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
           <div
-            className="h-full rounded-full bg-emerald-500 transition-all"
+            className={`h-full rounded-full transition-all ${
+              result.verdict ? riskBarStyles[result.verdict] : "bg-zinc-400"
+            }`}
             style={{ width: `${result.risk_score ?? 0}%` }}
           />
         </div>
@@ -153,6 +162,8 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
         </div>
       ) : null}
 
+      {ai ? <AiAssessment assessment={ai} /> : null}
+
       {technicalAnalysis.length > 0 ? (
         <EvidenceList title="Technical Analyzers" items={technicalAnalysis} />
       ) : null}
@@ -163,6 +174,40 @@ function VerdictState({ result }: { result: AnalysisResponse }) {
         <p className="text-xs font-medium uppercase text-zinc-500 dark:text-zinc-500">
           {pendingCapabilities.length} capability queued for later phases
         </p>
+      ) : null}
+    </div>
+  );
+}
+
+function AiAssessment({ assessment }: { assessment: Record<string, unknown> }) {
+  const weights = getRecordArray(assessment.evidence_weights);
+
+  return (
+    <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <h3 className="text-sm font-semibold tracking-normal">AI Assessment</h3>
+      <div className="mt-3 grid gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:grid-cols-2">
+        <span>Provider: {formatUnknown(assessment.provider)}</span>
+        <span>Model: {formatUnknown(assessment.model)}</span>
+        <span>Status: {formatUnknown(assessment.status)}</span>
+        <span>Fallback: {String(Boolean(assessment.fallback_used))}</span>
+        <span>Confidence: {formatPercent(assessment.confidence)}</span>
+        <span className="break-words">Action: {formatUnknown(assessment.recommended_action)}</span>
+      </div>
+
+      {weights.length > 0 ? (
+        <div className="mt-4 space-y-2">
+          {weights.slice(0, 4).map((weight) => (
+            <div
+              className="grid gap-1 text-sm text-zinc-600 dark:text-zinc-300 sm:grid-cols-[110px_1fr]"
+              key={`${String(weight.source)}-${String(weight.reason)}`}
+            >
+              <span className="font-semibold text-zinc-700 dark:text-zinc-200">
+                {formatUnknown(weight.source)} - {formatUnknown(weight.weight)}
+              </span>
+              <span>{formatUnknown(weight.reason)}</span>
+            </div>
+          ))}
+        </div>
       ) : null}
     </div>
   );
@@ -237,4 +282,11 @@ function formatUnknown(value: unknown) {
     return "n/a";
   }
   return String(value);
+}
+
+function formatPercent(value: unknown) {
+  if (typeof value !== "number") {
+    return "n/a";
+  }
+  return `${Math.round(value * 100)}%`;
 }

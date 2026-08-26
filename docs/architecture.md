@@ -28,7 +28,7 @@ ClickSafe follows a clean architecture layout. The dependency direction should p
 7. Send the evidence bundle to the OpenAI Responses API.
 8. Persist and return the final verdict payload.
 
-## Implemented Phase 5 Flow
+## Implemented Phase 6 Flow
 
 1. Accept a submitted URL string.
 2. Persist a requested analysis job.
@@ -40,8 +40,15 @@ ClickSafe follows a clean architecture layout. The dependency direction should p
 8. Save an HTML artifact with configured byte limits and truncation metadata.
 9. Run technical analyzers for redirects, HTML structure, metadata, forms, JavaScript, DNS, SSL, and WHOIS.
 10. Run reputation checks against VirusTotal and Google Safe Browsing when API keys are configured.
-11. Mark the job completed with validation, browser, technical, and reputation evidence, or failed when URL policy validation or browser navigation rejects the URL.
-12. Return and persist the job payload for later retrieval.
+11. Send the normalized evidence bundle to the OpenAI Responses API using a strict structured-output schema when `OPENAI_API_KEY` is configured.
+12. Persist the AI verdict, risk score, explanation, confidence, recommendation, and evidence weights. If OpenAI is unavailable, persist a labeled local heuristic fallback.
+13. Mark the job completed with validation, browser, technical, reputation, and AI evidence, or failed when URL policy validation or browser navigation rejects the URL.
+14. Return and persist the job payload for later retrieval.
+
+## AI Verdict Source
+
+- OpenAI Responses API requests use `responses.create`.
+- Structured output is requested with `text.format` using `type: json_schema`, `strict: true`, and a ClickSafe verdict schema.
 
 ## Reputation Sources
 
