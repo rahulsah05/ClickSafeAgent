@@ -16,6 +16,10 @@ from clicksafe.analyzers.reputation import ReputationAnalyzer
 from clicksafe.analyzers.ssl import SslAnalyzer
 from clicksafe.analyzers.whois import WhoisAnalyzer
 from clicksafe.application.errors import AnalysisNotFoundError, UrlValidationError
+from clicksafe.application.services.network_safety import (
+    DestinationSafetyClient,
+    DestinationSafetyService,
+)
 from clicksafe.application.services.url_validation import UrlValidationService
 from clicksafe.domain.analysis import AnalysisJob, UrlAnalysisContext
 from clicksafe.domain.enums import AnalysisStatus, EvidenceSeverity, Verdict
@@ -61,10 +65,14 @@ class AnalysisService:
         browser_client: BrowserCaptureClient | None = None,
         analyzers: Sequence[Analyzer] | None = None,
         ai_client: AIVerdictClient | None = None,
+        destination_safety_service: DestinationSafetyClient | None = None,
     ) -> None:
         self._repository = repository
         self._url_validation_service = url_validation_service or UrlValidationService()
-        self._browser_client = browser_client or PlaywrightClient()
+        self._destination_safety_service = destination_safety_service or DestinationSafetyService()
+        self._browser_client = browser_client or PlaywrightClient(
+            destination_safety_service=self._destination_safety_service
+        )
         self._analyzers = list(analyzers) if analyzers is not None else create_default_analyzers()
         self._ai_client = ai_client or OpenAIResponsesClient()
 
@@ -75,6 +83,7 @@ class AnalysisService:
         try:
             normalized_url = self._url_validation_service.normalize(url)
             normalized_url_value = normalized_url.normalized
+            await self._destination_safety_service.validate_url(normalized_url_value)
             running_job = await self._repository.update(
                 job.id,
                 normalized_url=normalized_url_value,
@@ -106,7 +115,7 @@ class AnalysisService:
             )
             analyzer_items = await self._run_analyzers(analysis_context)
 
-            evidence = self._build_phase_six_evidence(
+            evidence = self._build_phase_eight_evidence(
                 submitted_url=url,
                 normalized_url=normalized_url_value,
                 scheme=normalized_url.scheme,
@@ -148,7 +157,7 @@ class AnalysisService:
                         "reason": str(exc),
                     },
                     "lifecycle": {
-                    "phase": 6,
+                        "phase": 8,
                         "status": AnalysisStatus.FAILED.value,
                         "transitions": [
                             AnalysisStatus.REQUESTED.value,
@@ -172,11 +181,12 @@ class AnalysisService:
                 evidence={
                     "validation": {
                         "submitted_url": url,
+                        "normalized_url": normalized_url_value,
                         "valid": False,
                         "reason": str(exc),
                     },
                     "lifecycle": {
-                        "phase": 6,
+                        "phase": 8,
                         "status": AnalysisStatus.FAILED.value,
                         "transitions": [
                             AnalysisStatus.REQUESTED.value,
@@ -205,13 +215,13 @@ class AnalysisService:
     def _build_running_evidence(self, normalized_url: str) -> dict[str, Any]:
         return {
             "lifecycle": {
-                "phase": 6,
+                "phase": 8,
                 "status": AnalysisStatus.RUNNING.value,
                 "normalized_url": normalized_url,
             }
         }
 
-    def _build_phase_six_evidence(
+    def _build_phase_eight_evidence(
         self,
         *,
         submitted_url: str,
@@ -242,9 +252,10 @@ class AnalysisService:
                 "html_path": browser_capture.html_path,
                 "html_size_bytes": browser_capture.html_size_bytes,
                 "html_truncated": browser_capture.html_truncated,
+                "blocked_request_count": browser_capture.blocked_request_count,
             },
             "lifecycle": {
-                "phase": 6,
+                "phase": 8,
                 "status": AnalysisStatus.COMPLETED.value,
                 "transitions": [
                     AnalysisStatus.REQUESTED.value,
@@ -253,13 +264,37 @@ class AnalysisService:
                 ],
             },
             "technical_analysis": self._serialize_evidence_items(
-                item for item in analyzer_items if item.category == EvidenceCategory.TECHNICAL
+                [
+                    *(
+                        item
+                        for item in analyzer_items
+                        if item.category == EvidenceCategory.TECHNICAL
+                    ),
+                    *self._network_safety_evidence(browser_capture.blocked_request_count),
+                ]
             ),
             "reputation": self._serialize_evidence_items(
                 item for item in analyzer_items if item.category == EvidenceCategory.REPUTATION
             ),
-            "pending_capabilities": ["openai_responses_api_verdict"],
+            "pending_capabilities": [],
         }
+
+    def _network_safety_evidence(self, blocked_request_count: int) -> list[EvidenceItem]:
+        if blocked_request_count == 0:
+            return []
+        return [
+            EvidenceItem(
+                source="network_safety",
+                category=EvidenceCategory.TECHNICAL,
+                severity=EvidenceSeverity.MEDIUM,
+                title="Restricted network requests blocked",
+                description=(
+                    "ClickSafe blocked page requests to local, private, or restricted network "
+                    "destinations."
+                ),
+                data={"blocked_request_count": blocked_request_count},
+            )
+        ]
 
     async def _assess_evidence(self, evidence: dict[str, Any]) -> dict[str, Any]:
         try:

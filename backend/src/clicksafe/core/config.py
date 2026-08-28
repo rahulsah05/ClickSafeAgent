@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     max_html_bytes: int = Field(default=1_000_000, ge=10_000, le=5_000_000)
     screenshot_dir: str = "data/screenshots"
     html_dir: str = "data/html"
+    block_private_networks: bool = True
+    dns_resolution_timeout_seconds: float = Field(default=5.0, ge=1.0, le=30.0)
+
+    max_request_body_bytes: int = Field(default=8_192, ge=1_024, le=1_000_000)
+    analysis_rate_limit_enabled: bool = True
+    analysis_rate_limit_requests: int = Field(default=5, ge=1, le=1_000)
+    analysis_rate_limit_window_seconds: float = Field(default=60.0, ge=1.0, le=3_600.0)
 
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

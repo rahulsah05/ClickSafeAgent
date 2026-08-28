@@ -7,11 +7,18 @@ from playwright.async_api import (
 )
 from playwright.async_api import (
     Page,
+    Request,
     Response,
+    Route,
     async_playwright,
 )
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from clicksafe.application.errors import UnsafeDestinationError
+from clicksafe.application.services.network_safety import (
+    DestinationSafetyClient,
+    DestinationSafetyService,
+)
 from clicksafe.core.config import Settings, get_settings
 
 REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
@@ -51,15 +58,25 @@ class BrowserCapture:
     html_size_bytes: int
     html_truncated: bool
     screenshot_path: str
+    blocked_request_count: int = 0
 
 
 class PlaywrightClient:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        destination_safety_service: DestinationSafetyClient | None = None,
+    ) -> None:
         self._settings = settings or get_settings()
+        self._destination_safety_service = destination_safety_service or DestinationSafetyService(
+            self._settings
+        )
 
     async def capture(self, url: str, *, analysis_id: str | None = None) -> BrowserCapture:
         redirects: list[BrowserRedirect] = []
+        blocked_request_count = 0
         artifact_id = analysis_id or str(uuid4())
+        await self._validate_destination(url)
 
         try:
             async with async_playwright() as playwright:
@@ -81,13 +98,36 @@ class PlaywrightClient:
                     context.set_default_timeout(self._settings.browser_timeout_ms)
                     context.set_default_navigation_timeout(self._settings.browser_timeout_ms)
 
+                    async def guard_request(route: Route, request: Request) -> None:
+                        nonlocal blocked_request_count
+                        if not _is_http_url(request.url):
+                            await route.continue_()
+                            return
+                        try:
+                            await self._validate_destination(request.url)
+                        except BrowserNavigationError:
+                            blocked_request_count += 1
+                            await route.abort("blockedbyclient")
+                            return
+                        await route.continue_()
+
+                    await context.route("**/*", guard_request)
+
                     page = await context.new_page()
                     page.on("response", lambda response: self._record_redirect(response, redirects))
-                    response = await page.goto(
-                        url,
-                        wait_until="domcontentloaded",
-                        timeout=self._settings.browser_timeout_ms,
-                    )
+                    try:
+                        response = await page.goto(
+                            url,
+                            wait_until="domcontentloaded",
+                            timeout=self._settings.browser_timeout_ms,
+                        )
+                    except (PlaywrightError, PlaywrightTimeoutError) as exc:
+                        if blocked_request_count:
+                            raise BrowserNavigationError(
+                                "Browser navigation was blocked by the destination safety policy.",
+                                error_code="unsafe_destination",
+                            ) from exc
+                        raise
                     await self._wait_for_quiet_page(page)
 
                     if len(redirects) > self._settings.max_redirects:
@@ -114,6 +154,7 @@ class PlaywrightClient:
                         html_size_bytes=html_size_bytes,
                         html_truncated=html_truncated,
                         screenshot_path=str(screenshot_path),
+                        blocked_request_count=blocked_request_count,
                     )
                 finally:
                     await browser.close()
@@ -130,6 +171,15 @@ class PlaywrightClient:
             )
         except PlaywrightTimeoutError:
             return
+
+    async def _validate_destination(self, url: str) -> None:
+        try:
+            await self._destination_safety_service.validate_url(url)
+        except UnsafeDestinationError as exc:
+            raise BrowserNavigationError(
+                "Browser navigation was blocked by the destination safety policy.",
+                error_code="unsafe_destination",
+            ) from exc
 
     def _record_redirect(self, response: Response, redirects: list[BrowserRedirect]) -> None:
         if response.status not in REDIRECT_STATUS_CODES:
@@ -202,3 +252,7 @@ def map_playwright_error(exc: PlaywrightError | PlaywrightTimeoutError) -> Brows
         "Browser navigation failed while loading the URL.",
         error_code="navigation_failed",
     )
+
+
+def _is_http_url(url: str) -> bool:
+    return url.startswith(("http://", "https://"))

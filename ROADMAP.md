@@ -76,8 +76,12 @@ Status: complete.
 
 ## Phase 8 - Hardening
 
-- Add rate limiting and request size controls.
-- Add SSRF protections and private network blocking.
-- Add structured JSON logging.
-- Add end-to-end tests.
-- Add deployment documentation.
+Status: complete.
+
+- Added a per-process sliding-window limiter for scan submissions and configurable request-body
+  size limits.
+- Added destination-safety checks that block loopback, private, link-local, reserved,
+  special-use, and unresolved targets before navigation and during browser requests.
+- Added structured JSON application logs, request correlation IDs, and security response headers.
+- Added browser-level dashboard coverage using Playwright.
+- Added production deployment and operational guidance.

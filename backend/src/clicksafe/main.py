@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from clicksafe.api.middleware import RequestBodyLimitMiddleware, RequestContextMiddleware
+from clicksafe.api.rate_limiting import InMemorySlidingWindowRateLimiter
 from clicksafe.api.v1.router import api_router
 from clicksafe.core.config import get_settings
 from clicksafe.core.logging import configure_logging
@@ -30,7 +32,14 @@ def create_app() -> FastAPI:
         redoc_url="/redoc" if settings.app_env != "production" else None,
         lifespan=lifespan,
     )
+    app.state.analysis_rate_limiter = InMemorySlidingWindowRateLimiter(
+        max_requests=settings.analysis_rate_limit_requests,
+        window_seconds=settings.analysis_rate_limit_window_seconds,
+        enabled=settings.analysis_rate_limit_enabled,
+    )
 
+    app.add_middleware(RequestBodyLimitMiddleware, max_body_bytes=settings.max_request_body_bytes)
+    app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,

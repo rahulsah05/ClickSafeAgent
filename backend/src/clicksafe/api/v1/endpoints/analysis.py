@@ -1,10 +1,11 @@
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 
 from clicksafe.api.dependencies import AnalysisServiceDep
+from clicksafe.api.rate_limiting import enforce_analysis_rate_limit
 from clicksafe.application.errors import AnalysisNotFoundError
 from clicksafe.core.config import get_settings
 from clicksafe.domain.analysis import AnalysisJob
@@ -13,7 +14,12 @@ from clicksafe.schemas.analysis import AnalysisJobResponse, AnalyzeUrlRequest
 router = APIRouter()
 
 
-@router.post("/analyze", response_model=AnalysisJobResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/analyze",
+    response_model=AnalysisJobResponse,
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(enforce_analysis_rate_limit)],
+)
 async def analyze_url(
     payload: AnalyzeUrlRequest,
     service: AnalysisServiceDep,

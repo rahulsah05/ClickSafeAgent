@@ -122,7 +122,7 @@ def test_analyze_creates_completed_phase_six_job(client: TestClient) -> None:
     assert payload["evidence"]["ai"]["fallback_used"] is True
     assert payload["evidence"]["ai"]["reason"] == "missing_api_key"
     assert payload["evidence"]["pending_capabilities"] == []
-    assert payload["evidence"]["lifecycle"]["phase"] == 6
+    assert payload["evidence"]["lifecycle"]["phase"] == 8
     assert payload["evidence"]["lifecycle"]["transitions"] == [
         "requested",
         "running",
@@ -255,3 +255,30 @@ def test_list_recent_analyses(client: TestClient) -> None:
 
     assert response.status_code == 200
     assert len(response.json()) == 1
+
+
+def test_analyze_rate_limit_rejects_excess_requests(client: TestClient) -> None:
+    from clicksafe.api.rate_limiting import InMemorySlidingWindowRateLimiter
+
+    client.app.state.analysis_rate_limiter = InMemorySlidingWindowRateLimiter(
+        max_requests=1,
+        window_seconds=60,
+    )
+
+    first_response = client.post("/api/v1/analyze", json={"url": "ftp://example.com"})
+    second_response = client.post("/api/v1/analyze", json={"url": "ftp://example.com"})
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 429
+    assert second_response.headers["retry-after"] == "60"
+
+
+def test_rejects_request_bodies_over_the_configured_limit(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/analyze",
+        content=b"x" * 9_000,
+        headers={"content-type": "application/json", "content-length": "9000"},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "Request body exceeds the configured size limit."

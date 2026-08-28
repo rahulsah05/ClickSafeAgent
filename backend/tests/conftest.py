@@ -12,6 +12,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path) -> TestClient:
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("BLOCK_PRIVATE_NETWORKS", "false")
     get_settings.cache_clear()
     reset_database_state()
 
