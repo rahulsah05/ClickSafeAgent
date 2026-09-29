@@ -64,6 +64,46 @@ async def test_javascript_analyzer_flags_eval_and_atob(context: UrlAnalysisConte
     assert set(evidence[0].data["matched_patterns"]) >= {"eval", "base64_decode"}
 
 
+async def test_javascript_analyzer_ignores_location_href() -> None:
+    context = UrlAnalysisContext(
+        submitted_url="https://www.google.com/",
+        normalized_url="https://www.google.com/",
+        final_url="https://www.google.com/",
+        html="""
+        <html><body>
+          <script>
+            if (window.location.href.indexOf("q=") === -1) {
+              location.href = "/search";
+            }
+          </script>
+        </body></html>
+        """,
+    )
+
+    evidence = await JavaScriptAnalyzer().analyze(context)
+
+    assert evidence[0].data["matched_patterns"] == []
+    assert evidence[0].severity == EvidenceSeverity.INFO
+
+
+async def test_javascript_analyzer_flags_location_replace() -> None:
+    context = UrlAnalysisContext(
+        submitted_url="https://example.com/",
+        normalized_url="https://example.com/",
+        final_url="https://example.com/",
+        html=(
+            "<html><body><script>"
+            "location.replace('https://evil.example/');"
+            "</script></body></html>"
+        ),
+    )
+
+    evidence = await JavaScriptAnalyzer().analyze(context)
+
+    assert evidence[0].data["matched_patterns"] == ["location_replace"]
+    assert evidence[0].severity == EvidenceSeverity.MEDIUM
+
+
 async def test_metadata_analyzer_extracts_title_and_description(
     context: UrlAnalysisContext,
 ) -> None:

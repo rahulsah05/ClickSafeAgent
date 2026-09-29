@@ -37,6 +37,25 @@ test("submits a URL and presents the completed verdict", async ({ page }) => {
             recommended_action: "Proceed with normal caution.",
             evidence_weights: []
           },
+          ml_analysis: {
+            phishing_probability: 0.12,
+            predicted_class: "legitimate",
+            model_type: "LogisticRegression",
+            model_version: "1.0",
+            features_used: ["example.com"],
+            model_available: true,
+            summary: "Local ML classifier did not estimate a high phishing probability."
+          },
+          pre_scan: {
+            risk_score: 0,
+            risk_level: "low",
+            features: {},
+            suspicious_keywords: ["login"],
+            brand_matches: [],
+            warnings: [
+              "Suspicious keywords are evidence only and did not change the pre-scan score: login."
+            ]
+          },
           technical_analysis: [],
           reputation: [],
           pending_capabilities: []
@@ -56,5 +75,11 @@ test("submits a URL and presents the completed verdict", async ({ page }) => {
   await expect(page.getByText("Safe", { exact: true })).toBeVisible();
   await expect(page.getByText("12/100", { exact: true })).toBeVisible();
   await expect(page.getByText("Final destination:")).toBeVisible();
+  await expect(page.getByText("Initial URL risk")).toBeVisible();
+  await expect(page.getByText("ML analysis")).toBeVisible();
+  await expect(page.getByText("Phishing probability: 12%")).toBeVisible();
+  await expect(page.getByText("Prediction: legitimate")).toBeVisible();
+  await expect(page.getByText("Local classifier evidence. This is not the final verdict.")).toBeVisible();
+  await expect(page.getByText("Keywords, evidence only: login")).toBeVisible();
   await expect(page.getByText("AI Assessment")).toBeVisible();
 });

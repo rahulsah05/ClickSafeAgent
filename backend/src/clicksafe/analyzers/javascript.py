@@ -11,7 +11,7 @@ SUSPICIOUS_PATTERNS = {
     "document_write": re.compile(r"\bdocument\.write\s*\(", re.IGNORECASE),
     "base64_decode": re.compile(r"\batob\s*\(", re.IGNORECASE),
     "unescape": re.compile(r"\bunescape\s*\(", re.IGNORECASE),
-    "location_replace": re.compile(r"\blocation\.(replace|href)\b", re.IGNORECASE),
+    "location_replace": re.compile(r"\blocation\.replace\s*\(", re.IGNORECASE),
     "credential_keyword": re.compile(r"(password|passwd|credential|login)", re.IGNORECASE),
 }
 

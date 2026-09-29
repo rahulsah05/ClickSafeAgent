@@ -78,6 +78,10 @@ Classify the submitted URL as Safe, Suspicious, or Malicious using only the supp
 Risk score guidance: 0-30 Safe, 31-69 Suspicious, 70-100 Malicious.
 Treat browser failures, credential forms, insecure form actions, hidden redirects, recent domains,
 TLS failures, reputation hits, and obfuscated JavaScript as meaningful risk signals.
+URL pre-scan keywords such as login, account, secure, and payment are evidence only.
+Do not classify a URL as malicious from those words alone.
+ml_analysis.phishing_probability is one local classifier signal.
+Do not set the final verdict from that probability alone.
 Do not claim certainty beyond the evidence. Keep the explanation concise and evidence-grounded."""
 
 SEVERITY_SCORES = {

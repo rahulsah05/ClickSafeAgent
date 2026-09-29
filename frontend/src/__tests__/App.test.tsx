@@ -62,6 +62,23 @@ const completedAnalysis: AnalysisResponse = {
         description: "No provider detections were returned."
       }
     ],
+    ml_analysis: {
+      phishing_probability: 0.93,
+      predicted_class: "phishing",
+      model_type: "LogisticRegression",
+      model_version: "1.0",
+      features_used: ["login", "google.com"],
+      model_available: true,
+      summary: "Local ML classifier estimated a high phishing probability."
+    },
+    pre_scan: {
+      risk_score: 0,
+      risk_level: "low",
+      features: {},
+      suspicious_keywords: ["login"],
+      brand_matches: [],
+      warnings: ["Suspicious keywords are evidence only and did not change the pre-scan score: login."]
+    },
     pending_capabilities: []
   },
   error_message: null,
@@ -138,6 +155,14 @@ test("submits a scan and renders the screenshot, redirect trail, and evidence gr
   expect(screen.getByText("Redirect Trail")).toBeInTheDocument();
   expect(screen.getByText("Step 1")).toBeInTheDocument();
   expect(screen.getByText("Location: https://www.example.com/")).toBeInTheDocument();
+  expect(screen.getByText("Initial URL risk")).toBeInTheDocument();
+  expect(screen.getByText("ML analysis")).toBeInTheDocument();
+  expect(screen.getByText("Phishing probability: 93%")).toBeInTheDocument();
+  expect(screen.getByText("Prediction: phishing")).toBeInTheDocument();
+  expect(screen.getByText("Model: Logistic Regression")).toBeInTheDocument();
+  expect(screen.getByText("Local classifier evidence. This is not the final verdict.")).toBeInTheDocument();
+  expect(screen.getByText("Keywords, evidence only: login")).toBeInTheDocument();
+  expect(screen.getByText("Local pre-scan before deep analysis. This is not the final verdict.")).toBeInTheDocument();
   expect(screen.getByText("Technical Analyzers")).toBeInTheDocument();
   expect(screen.getByText("Reputation")).toBeInTheDocument();
   expect(screen.getByAltText("Captured page screenshot")).toHaveAttribute(

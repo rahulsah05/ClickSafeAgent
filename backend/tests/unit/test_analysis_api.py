@@ -112,6 +112,10 @@ def test_analyze_creates_completed_phase_six_job(client: TestClient) -> None:
     assert payload["normalized_url"] == "https://example.com/a"
     assert payload["verdict"] == "Safe"
     assert payload["risk_score"] == 8
+    assert payload["evidence"]["pre_scan"]["risk_level"] == "low"
+    assert payload["evidence"]["pre_scan"]["suspicious_keywords"] == []
+    assert payload["evidence"]["ml_analysis"]["model_available"] is True
+    assert payload["evidence"]["ml_analysis"]["model_type"] == "LogisticRegression"
     assert payload["evidence"]["validation"]["valid"] is True
     assert payload["evidence"]["browser"]["captured"] is True
     assert payload["evidence"]["browser"]["final_url"] == "https://example.com/a"
@@ -148,6 +152,99 @@ def test_analyze_keeps_unexpected_reputation_failures_in_reputation_evidence(
     assert evidence["reputation"][0]["category"] == "reputation"
 
 
+def test_pre_scan_keywords_do_not_replace_the_final_verdict(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/analyze",
+        json={"url": "https://example.com/login/account/secure/payment"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    pre_scan = payload["evidence"]["pre_scan"]
+    assert payload["status"] == "completed"
+    assert payload["verdict"] == "Safe"
+    assert payload["risk_score"] == 8
+    assert pre_scan["risk_level"] == "low"
+    assert pre_scan["risk_score"] == 0
+    assert set(pre_scan["suspicious_keywords"]) == {"account", "login", "payment", "secure"}
+    ml_analysis = payload["evidence"]["ml_analysis"]
+    assert ml_analysis["model_available"] is True
+    assert ml_analysis["predicted_class"] == "phishing"
+    assert ml_analysis["phishing_probability"] > 0.9
+    assert payload["verdict"] != "Malicious"
+    assert payload["evidence"]["technical_analysis"][0]["source"] == "fake_technical"
+    assert payload["evidence"]["reputation"][0]["source"] == "fake_reputation"
+    assert payload["evidence"]["ai"]["fallback_used"] is True
+
+
+def test_pre_scan_failure_does_not_stop_deep_analysis(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExplodingPreScanner:
+        def scan(self, url: str) -> dict[str, object]:
+            _ = url
+            raise RuntimeError("pre-scan failed")
+
+    monkeypatch.setattr(
+        "clicksafe.application.services.analysis_service.UrlPreScanner",
+        ExplodingPreScanner,
+    )
+
+    response = client.post("/api/v1/analyze", json={"url": "example.com"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["verdict"] == "Safe"
+    assert payload["evidence"]["browser"]["captured"] is True
+    assert "isolated" in payload["evidence"]["pre_scan"]["warnings"][0]
+
+
+def test_ml_failure_does_not_stop_deep_analysis(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ExplodingMlService:
+        async def predict_url_risk(
+            self,
+            url: str,
+            structured_features: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = self, url, structured_features
+            raise RuntimeError("ml down")
+
+    monkeypatch.setattr(
+        "clicksafe.application.services.analysis_service.MlPhishingService",
+        ExplodingMlService,
+    )
+
+    response = client.post("/api/v1/analyze", json={"url": "https://google.com/123"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["verdict"] == "Safe"
+    assert payload["evidence"]["browser"]["captured"] is True
+    assert payload["evidence"]["technical_analysis"][0]["source"] == "fake_technical"
+    assert payload["evidence"]["ml_analysis"]["model_available"] is False
+    assert payload["evidence"]["ml_analysis"]["error"] == "ML prediction failed"
+
+
+def test_legitimate_ml_evidence_does_not_replace_the_final_verdict(client: TestClient) -> None:
+    response = client.post("/api/v1/analyze", json={"url": "https://google.com/123"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    ml_analysis = payload["evidence"]["ml_analysis"]
+    assert payload["status"] == "completed"
+    assert payload["verdict"] == "Safe"
+    assert payload["risk_score"] == 8
+    assert ml_analysis["predicted_class"] == "legitimate"
+    assert ml_analysis["phishing_probability"] < 0.05
+    assert payload["evidence"]["ai"]["provider"] == "openai_responses"
+
+
 def test_analyze_persists_failed_policy_validation(client: TestClient) -> None:
     response = client.post("/api/v1/analyze", json={"url": "ftp://example.com"})
 
@@ -156,6 +253,9 @@ def test_analyze_persists_failed_policy_validation(client: TestClient) -> None:
     assert payload["status"] == "failed"
     assert payload["normalized_url"] is None
     assert payload["error_message"] == "Only HTTP and HTTPS URLs can be analyzed."
+    assert payload["verdict"] is None
+    assert payload["evidence"]["pre_scan"]["risk_level"] == "low"
+    assert payload["evidence"]["ml_analysis"]["model_available"] is True
 
 
 def test_analyze_persists_failed_browser_capture(

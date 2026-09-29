@@ -104,6 +104,8 @@ function VerdictState({ onRetry, result }: { onRetry: () => void; result: Analys
   const badgeLabel = result.verdict ?? titleCase(result.status);
   const badgeClass = result.verdict ? verdictStyles[result.verdict] : statusStyles[result.status];
   const BadgeIcon = result.status === "failed" ? XCircle : CheckCircle2;
+  const preScan = getRecord(result.evidence.pre_scan);
+  const mlAnalysis = getRecord(result.evidence.ml_analysis);
   const validation = getRecord(result.evidence.validation);
   const browser = getRecord(result.evidence.browser);
   const ai = getRecord(result.evidence.ai);
@@ -154,6 +156,10 @@ function VerdictState({ onRetry, result }: { onRetry: () => void; result: Analys
         <InfoRow label="Job ID" value={result.id} />
         <InfoRow label="Completed" value={formatDate(result.completed_at)} />
       </dl>
+
+      {preScan ? <PreScanAssessment assessment={preScan} /> : null}
+
+      {mlAnalysis ? <MlAssessment assessment={mlAnalysis} /> : null}
 
       {validation ? (
         <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
@@ -281,6 +287,76 @@ function ScreenshotPreview({ src }: { src: string }) {
   );
 }
 
+function PreScanAssessment({ assessment }: { assessment: Record<string, unknown> }) {
+  const keywords = stringList(assessment.suspicious_keywords);
+  const brands = stringList(assessment.brand_matches);
+  const warnings = stringList(assessment.warnings);
+
+  return (
+    <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <h3 className="text-sm font-semibold tracking-normal">Initial URL risk</h3>
+      <p className="mt-1 text-sm leading-6 text-zinc-500 dark:text-zinc-400">
+        Local pre-scan before deep analysis. This is not the final verdict.
+      </p>
+      <div className="mt-3 grid gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:grid-cols-2">
+        <span>Level: {formatUnknown(assessment.risk_level)}</span>
+        <span>Score: {formatUnknown(assessment.risk_score)}/100</span>
+      </div>
+      {keywords.length > 0 ? (
+        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          Keywords, evidence only: {keywords.join(", ")}
+        </p>
+      ) : null}
+      {brands.length > 0 ? (
+        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          Brand tokens: {brands.join(", ")}
+        </p>
+      ) : null}
+      {warnings.length > 0 ? (
+        <ul className="mt-3 space-y-1 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          {warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+function MlAssessment({ assessment }: { assessment: Record<string, unknown> }) {
+  const features = stringList(assessment.features_used).slice(0, 8);
+  const available = assessment.model_available !== false;
+
+  return (
+    <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <h3 className="text-sm font-semibold tracking-normal">ML analysis</h3>
+      <p className="mt-1 text-sm leading-6 text-zinc-500 dark:text-zinc-400">
+        Local classifier evidence. This is not the final verdict.
+      </p>
+      {available ? (
+        <div className="mt-3 grid gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:grid-cols-2">
+          <span>Phishing probability: {formatPercent(assessment.phishing_probability)}</span>
+          <span>Prediction: {formatUnknown(assessment.predicted_class)}</span>
+          <span>Model: {formatModel(assessment.model_type)}</span>
+          <span>Version: {formatUnknown(assessment.model_version)}</span>
+        </div>
+      ) : (
+        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          {formatUnknown(assessment.error)}
+        </p>
+      )}
+      {typeof assessment.summary === "string" ? (
+        <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{assessment.summary}</p>
+      ) : null}
+      {features.length > 0 ? (
+        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          URL tokens used: {features.join(", ")}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function AiAssessment({ assessment }: { assessment: Record<string, unknown> }) {
   const weights = getRecordArray(assessment.evidence_weights);
 
@@ -372,6 +448,13 @@ function getRecord(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
 function getRecordArray(value: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(value)) {
     return [];
@@ -384,6 +467,13 @@ function formatUnknown(value: unknown) {
     return "n/a";
   }
   return String(value);
+}
+
+function formatModel(value: unknown) {
+  if (value === "LogisticRegression") {
+    return "Logistic Regression";
+  }
+  return formatUnknown(value);
 }
 
 function formatPercent(value: unknown) {

@@ -16,10 +16,12 @@ from clicksafe.analyzers.reputation import ReputationAnalyzer
 from clicksafe.analyzers.ssl import SslAnalyzer
 from clicksafe.analyzers.whois import WhoisAnalyzer
 from clicksafe.application.errors import AnalysisNotFoundError, UrlValidationError
+from clicksafe.application.services.ml_phishing_service import MlPhishingService
 from clicksafe.application.services.network_safety import (
     DestinationSafetyClient,
     DestinationSafetyService,
 )
+from clicksafe.application.services.url_pre_scanner import UrlPreScanner
 from clicksafe.application.services.url_validation import UrlValidationService
 from clicksafe.domain.analysis import AnalysisJob, UrlAnalysisContext
 from clicksafe.domain.enums import AnalysisStatus, EvidenceSeverity, Verdict
@@ -40,6 +42,20 @@ class BrowserCaptureClient(Protocol):
 
 class AIVerdictClient(Protocol):
     async def assess(self, evidence: dict[str, Any]) -> dict[str, Any]:
+        ...
+
+
+class UrlPreScanClient(Protocol):
+    def scan(self, url: str) -> dict[str, Any]:
+        ...
+
+
+class MlRiskClient(Protocol):
+    async def predict_url_risk(
+        self,
+        url: str,
+        structured_features: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         ...
 
 
@@ -66,6 +82,8 @@ class AnalysisService:
         analyzers: Sequence[Analyzer] | None = None,
         ai_client: AIVerdictClient | None = None,
         destination_safety_service: DestinationSafetyClient | None = None,
+        pre_scanner: UrlPreScanClient | None = None,
+        ml_service: MlRiskClient | None = None,
     ) -> None:
         self._repository = repository
         self._url_validation_service = url_validation_service or UrlValidationService()
@@ -75,9 +93,13 @@ class AnalysisService:
         )
         self._analyzers = list(analyzers) if analyzers is not None else create_default_analyzers()
         self._ai_client = ai_client or OpenAIResponsesClient()
+        self._pre_scanner = pre_scanner or UrlPreScanner()
+        self._ml_service = ml_service or MlPhishingService()
 
     async def analyze(self, url: str) -> AnalysisJob:
         job = await self._repository.create(submitted_url=url)
+        pre_scan = self._run_pre_scan(url)
+        ml_analysis = await self._run_ml(url, pre_scan)
         normalized_url_value: str | None = None
 
         try:
@@ -88,7 +110,7 @@ class AnalysisService:
                 job.id,
                 normalized_url=normalized_url_value,
                 status=AnalysisStatus.RUNNING,
-                evidence=self._build_running_evidence(normalized_url_value),
+                evidence=self._build_running_evidence(normalized_url_value, pre_scan, ml_analysis),
             )
             if running_job is None:
                 raise AnalysisNotFoundError(f"Analysis job {job.id} disappeared during processing.")
@@ -123,6 +145,8 @@ class AnalysisService:
                 port=normalized_url.port,
                 browser_capture=browser_capture,
                 analyzer_items=analyzer_items,
+                pre_scan=pre_scan,
+                ml_analysis=ml_analysis,
             )
             ai_assessment = await self._assess_evidence(evidence)
             evidence["ai"] = ai_assessment
@@ -146,6 +170,8 @@ class AnalysisService:
                 job.id,
                 status=AnalysisStatus.FAILED,
                 evidence={
+                    "pre_scan": pre_scan,
+                    "ml_analysis": ml_analysis,
                     "validation": {
                         "submitted_url": url,
                         "normalized_url": normalized_url_value,
@@ -179,6 +205,8 @@ class AnalysisService:
                 job.id,
                 status=AnalysisStatus.FAILED,
                 evidence={
+                    "pre_scan": pre_scan,
+                    "ml_analysis": ml_analysis,
                     "validation": {
                         "submitted_url": url,
                         "normalized_url": normalized_url_value,
@@ -212,13 +240,20 @@ class AnalysisService:
     async def list_recent(self, limit: int = 20) -> list[AnalysisJob]:
         return await self._repository.list_recent(limit=limit)
 
-    def _build_running_evidence(self, normalized_url: str) -> dict[str, Any]:
+    def _build_running_evidence(
+        self,
+        normalized_url: str,
+        pre_scan: dict[str, Any],
+        ml_analysis: dict[str, Any],
+    ) -> dict[str, Any]:
         return {
+            "pre_scan": pre_scan,
+            "ml_analysis": ml_analysis,
             "lifecycle": {
                 "phase": 8,
                 "status": AnalysisStatus.RUNNING.value,
                 "normalized_url": normalized_url,
-            }
+            },
         }
 
     def _build_phase_eight_evidence(
@@ -231,8 +266,12 @@ class AnalysisService:
         port: int | None,
         browser_capture: BrowserCapture,
         analyzer_items: list[EvidenceItem],
+        pre_scan: dict[str, Any],
+        ml_analysis: dict[str, Any],
     ) -> dict[str, Any]:
         return {
+            "pre_scan": pre_scan,
+            "ml_analysis": ml_analysis,
             "validation": {
                 "submitted_url": submitted_url,
                 "normalized_url": normalized_url,
@@ -277,6 +316,55 @@ class AnalysisService:
                 item for item in analyzer_items if item.category == EvidenceCategory.REPUTATION
             ),
             "pending_capabilities": [],
+        }
+
+    async def _run_ml(self, url: str, pre_scan: dict[str, Any]) -> dict[str, Any]:
+        features = pre_scan.get("features")
+        structured_features = features if isinstance(features, dict) else None
+        try:
+            result = await self._ml_service.predict_url_risk(url, structured_features)
+        except Exception as exc:
+            return self._isolated_ml(type(exc).__name__)
+        if not isinstance(result, dict):
+            return self._isolated_ml("invalid_result")
+        return result
+
+    def _isolated_ml(self, reason: str) -> dict[str, Any]:
+        return {
+            "phishing_probability": None,
+            "predicted_class": None,
+            "model_version": "1.0",
+            "model_type": "LogisticRegression",
+            "features_used": [],
+            "model_available": False,
+            "error": "ML prediction failed",
+            "summary": (
+                "Local ML classifier failed and was isolated from the deep analysis "
+                f"pipeline ({reason})."
+            ),
+            "structured_feature_count": 0,
+        }
+
+    def _run_pre_scan(self, url: str) -> dict[str, Any]:
+        try:
+            result = self._pre_scanner.scan(url)
+        except Exception as exc:
+            return self._isolated_pre_scan(type(exc).__name__)
+        if not isinstance(result, dict):
+            return self._isolated_pre_scan("invalid_result")
+        return result
+
+    def _isolated_pre_scan(self, reason: str) -> dict[str, Any]:
+        return {
+            "risk_score": 0,
+            "risk_level": "low",
+            "features": {},
+            "suspicious_keywords": [],
+            "brand_matches": [],
+            "warnings": [
+                "URL pre-scan failed and was isolated from the deep analysis pipeline "
+                f"({reason})."
+            ],
         }
 
     def _network_safety_evidence(self, blocked_request_count: int) -> list[EvidenceItem]:

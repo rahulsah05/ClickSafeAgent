@@ -4,7 +4,9 @@ ClickSafe is an AI-powered phishing detection application. The finished product 
 
 This repository is currently at Phase 8: the complete URL-analysis pipeline and dashboard are
 implemented, with request throttling, body-size limits, structured JSON logs, SSRF protections,
-browser-level dashboard coverage, and deployment guidance added for hardening.
+browser-level dashboard coverage, and deployment guidance added for hardening. Two later checks,
+a local URL pre-scan and a local phishing classifier, now run before that pipeline as evidence
+only. A beginner-friendly snapshot of what is finished is in [PROGRESS.md](PROGRESS.md).
 
 ## Stack
 
