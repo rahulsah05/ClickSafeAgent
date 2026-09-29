@@ -7,19 +7,21 @@ ClickSafe validates the destination, visits it in an automated browser, gathers 
 reputation evidence, and returns a **Safe**, **Suspicious**, or **Malicious** verdict with a
 risk score from 0 to 100.
 
-Implementation status: **Phases 1 through 8 are complete.** The current committed roadmap is
-complete.
+Implementation status: **Phases 1 through 8 are complete.** The committed roadmap is complete.
+Two later checks now run in front of that pipeline and are stored on the same job: a local URL
+pre-scan and a local phishing classifier. Both are evidence. Neither one sets the verdict.
 
 ClickSafe is an evidence-assisted security tool. Its verdict is a risk assessment, not a
 guarantee that a website is harmless.
 
-Analysis payloads now store `lifecycle.phase: 8` to align runtime evidence with the completed
-project stage.
+Analysis payloads still store `lifecycle.phase: 8`. The newer checks were added inside that
+stage. They did not add a public endpoint, a verdict label, or a database table. A
+beginner-friendly snapshot is in [PROGRESS.md](PROGRESS.md).
 
 ## Product Goals
 
 - Help users make a safer decision before opening an unfamiliar link.
-- Combine browser, technical, reputation, and AI evidence rather than relying on one signal.
+- Combine URL-text, classifier, browser, technical, reputation, and AI evidence rather than relying on one signal.
 - Preserve enough evidence for a user or security analyst to understand the verdict.
 - Keep the system modular so analyzers and data providers can be changed independently.
 - Provide a responsive dashboard that works in light and dark modes.
@@ -28,14 +30,18 @@ project stage.
 
 1. A user enters an HTTP/HTTPS URL or a bare domain in the React dashboard.
 2. The frontend sends the URL to `POST /api/v1/analyze`.
-3. The backend validates and normalizes the URL, then creates an analysis job in SQLite.
-4. Playwright loads the destination in a new Chromium browser context.
-5. ClickSafe records the redirect chain, final URL, response status, page HTML, and a full-page
+3. The backend creates an analysis job in SQLite, then runs the local URL pre-scan and the local
+   phishing classifier. A failure in either check is saved and does not stop the scan.
+4. The backend validates and normalizes the URL, then rejects local, private, and other
+   restricted destinations.
+5. Playwright loads the destination in a new Chromium browser context.
+6. ClickSafe records the redirect chain, final URL, response status, page HTML, and a full-page
    screenshot.
-6. Technical analyzers and reputation providers collect evidence.
-7. The evidence bundle is assessed with the OpenAI Responses API when an API key is configured.
-   A clearly labeled local heuristic fallback is used when it is not.
-8. The job, verdict, score, explanation, and evidence are persisted and shown in the dashboard.
+7. Technical analyzers and reputation providers collect evidence.
+8. The evidence bundle, including the pre-scan and classifier results, is assessed with the
+   OpenAI Responses API when an API key is configured. A clearly labeled local heuristic
+   fallback is used when it is not.
+9. The job, verdict, score, explanation, and evidence are persisted and shown in the dashboard.
 
 ## Implemented Features
 
@@ -48,6 +54,71 @@ project stage.
   domain.
 - Persists the job lifecycle as `requested`, `running`, `completed`, or `failed`.
 - Returns useful persisted failure information for validation and browser-navigation errors.
+- Keeps the pre-scan and classifier results on the job when validation or browser navigation
+  fails.
+
+### URL Pre-Scan
+
+`UrlPreScanner` in `backend/src/clicksafe/application/services/url_pre_scanner.py` reads the
+submitted URL as text. It does not fetch the page, and it does not produce the ClickSafe verdict.
+The dashboard shows this block as **Initial URL risk**.
+
+The result stores `risk_score`, `risk_level`, `features`, `suspicious_keywords`,
+`brand_matches`, and `warnings`.
+
+| Score | Level |
+| --- | --- |
+| 0–24 | low |
+| 25–54 | medium |
+| 55–100 | high |
+
+| Signal | Points |
+| --- | --- |
+| Hostname is an IP address | 30 |
+| URL contains `@` | 30 |
+| A known brand token is not on that brand's official domain | 25 |
+| Hostname uses Punycode (`xn--`) | 20 |
+| Top-level domain is on the suspicious list | 15 |
+| Domain is a known URL shortener | 15 |
+| URL contains percent-encoded characters | 10 |
+| Hostname has 4 or more subdomains | 10 |
+| URL length is 150 characters or more | 8 |
+| Domain length is 50 characters or more | 8 |
+| URL contains 7 or more dots, 5 or more hyphens, 15 or more digits, or 20 or more special characters | 6 |
+| Words such as `login`, `account`, `secure`, or `payment` | 0 |
+
+Keyword matches are saved and named in a warning. Their score contribution is 0, because a
+legitimate site can contain those words. If the scanner throws, the job stores a low score of 0
+and a warning, and the rest of the scan continues.
+
+### Local Phishing Classifier
+
+`MlPhishingService` calls the saved model in
+`backend/src/clicksafe/infrastructure/ml/models/model.joblib`. The pipeline is TF-IDF plus
+logistic regression, pinned to scikit-learn `>=1.7.2,<1.8`. It was trained earlier on raw URL
+text and copied into this backend. It was not retrained here.
+
+The model scores only the raw URL string. Structured pre-scan features are counted and stored,
+but they are not model inputs. Training labels `good` and `bad` are shown as `legitimate` and
+`phishing`. The stored result is `evidence.ml_analysis`:
+
+- `phishing_probability`
+- `predicted_class`
+- `model_type` (`LogisticRegression`) and `model_version` (`1.0`)
+- `features_used`, up to 24 recognized URL tokens
+- `model_available`
+- a short summary
+
+The dashboard shows this block as **ML analysis** and states that it is not the final verdict.
+The OpenAI instructions repeat that rule: a high phishing probability is one signal and must not
+become the verdict by itself.
+
+A missing, corrupt, or failing model returns `model_available: false` and an error string. The
+browser, technical, reputation, and AI steps still run.
+
+The saved model can assign a high phishing probability to an ordinary keyword-heavy URL. Read it
+beside the other evidence. Reputation checks can still produce **Malicious** when this classifier
+says legitimate.
 
 ### Browser Evidence Collection
 
@@ -71,7 +142,7 @@ Each analyzer is isolated in its own backend module and contributes standardized
 | HTML analyzer | Page structure and potentially unusual or limited HTML content. |
 | Metadata analyzer | Titles, descriptions, canonical data, and relevant page metadata. |
 | Forms analyzer | Forms, credential-oriented fields, methods, actions, and external form targets. |
-| JavaScript analyzer | Inline scripts and suspicious JavaScript indicators. |
+| JavaScript analyzer | Inline scripts and suspicious JavaScript indicators. `location.replace(` is the redirect pattern. Assigning `location.href` is not treated as that pattern. |
 | DNS analyzer | DNS resolution information for the destination hostname. |
 | SSL analyzer | HTTPS certificate connectivity and certificate details. |
 | WHOIS analyzer | Registered-domain information and age-related evidence where available. |
@@ -106,6 +177,12 @@ Google Web Risk or another appropriately licensed provider.
   fallback was used.
 - Uses a conservative local heuristic when `OPENAI_API_KEY` is missing, OpenAI is unavailable,
   or the response cannot be validated.
+- Instructs the model that pre-scan keywords and `ml_analysis.phishing_probability` are evidence
+  only and must not, by themselves, make a URL malicious.
+- Maps the fallback from the strongest technical or reputation severity: info 8, low 25, medium
+  50, high 75, and critical 92. A reputation hit raises the fallback score to at least 92. A
+  failed browser capture raises it to at least 65. The same bands apply: 0–30 Safe, 31–69
+  Suspicious, and 70–100 Malicious. The result reports `fallback_used: true`.
 
 ### API and Persistence
 
@@ -124,6 +201,9 @@ Google Web Risk or another appropriately licensed provider.
 - URL input with an in-progress scanning state.
 - Safe, Suspicious, and Malicious verdict badges and risk-score bar.
 - Human-readable explanation, job metadata, and validation details.
+- Initial URL risk from the pre-scan, labeled as not the final verdict.
+- ML analysis from the local classifier, including probability, predicted class, model name, and
+  the same not-the-final-verdict label. An unavailable model shows its error instead.
 - Browser-capture details, redirect timeline, final URL, and screenshot preview.
 - AI assessment details, including confidence, action, model, status, fallback state, and top
   evidence weights.
@@ -137,8 +217,10 @@ Google Web Risk or another appropriately licensed provider.
 - Ruff linting for backend quality checks.
 - Pytest coverage for validation, API lifecycle, browser error mapping, technical analyzers,
   reputation integrations, and OpenAI response handling.
-- Vitest and Testing Library coverage for dashboard rendering, successful scans, failure states,
-  retries, screenshot behavior, and theme toggling.
+- Pytest coverage for the URL pre-scan, the local classifier, and the rule that keyword-heavy
+  URLs and a high phishing probability do not replace the final verdict.
+- Vitest and Testing Library coverage for dashboard rendering, the pre-scan and ML blocks,
+  successful scans, failure states, retries, screenshot behavior, and theme toggling.
 - Environment-based configuration with `.env.example` templates.
 - Standard application logging to stdout.
 - Structured JSON logs with correlation IDs, method/path/status/duration fields, and no URL query
@@ -168,10 +250,14 @@ Application services and URL validation
         +--> Infrastructure adapters
                |- SQLite repository
                |- Playwright Chromium client
+               |- Local phishing classifier
                |- OpenAI Responses API client
                |- VirusTotal client
                `- Google Safe Browsing client
 ```
+
+The pre-scan and classifier run inside the application service, before validation and before any
+adapter visits the URL.
 
 ### Repository Layout
 
@@ -180,11 +266,11 @@ clickSafe/
 |- backend/
 |  |- src/clicksafe/
 |  |  |- api/                 FastAPI routers and dependency wiring
-|  |  |- application/         URL validation and analysis orchestration
+|  |  |- application/         URL validation, pre-scan, classifier, and orchestration
 |  |  |- analyzers/           One phishing analyzer per file
 |  |  |- core/                Settings and logging
 |  |  |- domain/              Job, verdict, and evidence contracts
-|  |  |- infrastructure/      Browser, database, AI, and reputation adapters
+|  |  |- infrastructure/      Browser, database, AI, local model, and reputation adapters
 |  |  `- schemas/             Request and response models
 |  `- tests/                  Backend unit and API tests
 |- frontend/
@@ -197,8 +283,13 @@ clickSafe/
 |  `- architecture.md         Architecture documentation
 |- README.md                  Quick start and current endpoint overview
 |- ROADMAP.md                 Phase-by-phase implementation plan
+|- PROGRESS.md                Beginner-friendly snapshot of what is finished
 `- PROJECT_DETAILS.md         This complete project reference
 ```
+
+The runtime model file is `backend/src/clicksafe/infrastructure/ml/models/model.joblib`. The older
+training project is kept in this repository as `previous_ml_project/`. It is ordinary source now.
+It is not a nested Git repository, and the current app does not run it.
 
 ## API Contract
 
@@ -232,12 +323,15 @@ Base path: `/api/v1`
   "risk_score": 8,
   "explanation": "Human-readable risk explanation.",
   "evidence": {
+    "pre_scan": {},
+    "ml_analysis": {},
     "validation": {},
     "browser": {},
     "technical_analysis": [],
     "reputation": [],
     "ai": {},
-    "lifecycle": {}
+    "lifecycle": {},
+    "pending_capabilities": []
   },
   "error_message": null,
   "created_at": "ISO-8601 timestamp",
@@ -248,6 +342,8 @@ Base path: `/api/v1`
 
 The `evidence` object is intentionally extensible. Current top-level groups are:
 
+- `pre_scan`: local URL-text score, level, features, keywords, brand matches, and warnings.
+- `ml_analysis`: local classifier probability, class, model metadata, and availability.
 - `validation`: normalized URL data and validation result.
 - `browser`: capture status, final URL, redirects, artifact paths, HTML size, and truncation.
 - `technical_analysis`: standardized analyzer evidence items.
@@ -343,6 +439,7 @@ npm run build
 | Browser automation | Playwright, Chromium |
 | HTML processing | Beautiful Soup |
 | DNS, WHOIS, and TLS | dnspython, python-whois, tldextract, cryptography |
+| Local classifier | scikit-learn 1.7.x, joblib |
 | Reputation | VirusTotal API v3, Google Safe Browsing v4 |
 | AI reasoning | OpenAI Python SDK and Responses API |
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS |
@@ -363,6 +460,15 @@ Status: **complete**.
 - Added browser-level end-to-end dashboard coverage.
 - Added [deployment guidance](docs/deployment.md) and operational checks.
 
+## Present in the Repository, Not on the Live Scan
+
+These modules exist and are not called by `AnalysisService.analyze`:
+
+- `PaymentAnalyzer` in `backend/src/clicksafe/analyzers/payment.py`. The default analyzer list
+  does not include it.
+- The agent package in `backend/src/clicksafe/application/agent/`. It is not wired to the
+  dashboard scan.
+
 ## Security and Operational Notes
 
 - Keep ClickSafe behind a reverse proxy and in a dedicated scanning environment. Application-level
@@ -381,13 +487,15 @@ Status: **complete**.
 
 ## Project Completion Criteria
 
-ClickSafe has completed its committed implementation roadmap. Before a production launch, the team
-must still review provider licensing, secret management, artifact retention, network isolation,
-and operational ownership for its specific environment.
+ClickSafe has completed its committed implementation roadmap. The URL pre-scan and local
+classifier are additional evidence inside that completed pipeline. Before a production launch, the
+team must still review provider licensing, secret management, artifact retention, network
+isolation, and operational ownership for its specific environment.
 
 ## Related Documents
 
 - [Quick start and endpoint overview](README.md)
+- [Beginner-friendly progress snapshot](PROGRESS.md)
 - [Phase-by-phase roadmap](ROADMAP.md)
 - [Architecture notes](docs/architecture.md)
 - [Deployment guide](docs/deployment.md)
