@@ -1,3 +1,5 @@
+import asyncio
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -42,6 +44,25 @@ class BrowserContentLimitError(BrowserCaptureError):
     pass
 
 
+def _loop_can_spawn_subprocess(loop: asyncio.AbstractEventLoop) -> bool:
+    # uvicorn --reload on Windows serves requests on SelectorEventLoop.
+    # That loop raises NotImplementedError from create_subprocess_exec, which
+    # Playwright uses to start its driver. ProactorEventLoop can spawn it.
+    if sys.platform != "win32":
+        return True
+    return loop.__class__.__name__ == "ProactorEventLoop"
+
+
+def _proactor_event_loop() -> asyncio.AbstractEventLoop:
+    policy_type = getattr(asyncio, "WindowsProactorEventLoopPolicy", None)
+    if policy_type is None:
+        raise BrowserSetupError(
+            "Playwright cannot start a browser on this event loop.",
+            error_code="browser_event_loop",
+        )
+    return policy_type().new_event_loop()
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserRedirect:
     url: str
@@ -73,95 +94,106 @@ class PlaywrightClient:
         )
 
     async def capture(self, url: str, *, analysis_id: str | None = None) -> BrowserCapture:
-        redirects: list[BrowserRedirect] = []
-        blocked_request_count = 0
         artifact_id = analysis_id or str(uuid4())
         await self._validate_destination(url)
 
         try:
-            async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch(
-                    headless=self._settings.playwright_headless,
-                )
-                try:
-                    context = await browser.new_context(
-                        accept_downloads=False,
-                        ignore_https_errors=True,
-                        java_script_enabled=True,
-                        service_workers="block",
-                        user_agent=(
-                            "ClickSafe/0.1 security scanner "
-                            "(Playwright; compatible; phishing analysis)"
-                        ),
-                        viewport={"width": 1365, "height": 768},
-                    )
-                    context.set_default_timeout(self._settings.browser_timeout_ms)
-                    context.set_default_navigation_timeout(self._settings.browser_timeout_ms)
-
-                    async def guard_request(route: Route, request: Request) -> None:
-                        nonlocal blocked_request_count
-                        if not _is_http_url(request.url):
-                            await route.continue_()
-                            return
-                        try:
-                            await self._validate_destination(request.url)
-                        except BrowserNavigationError:
-                            blocked_request_count += 1
-                            await route.abort("blockedbyclient")
-                            return
-                        await route.continue_()
-
-                    await context.route("**/*", guard_request)
-
-                    page = await context.new_page()
-                    page.on("response", lambda response: self._record_redirect(response, redirects))
-                    try:
-                        response = await page.goto(
-                            url,
-                            wait_until="domcontentloaded",
-                            timeout=self._settings.browser_timeout_ms,
-                        )
-                    except (PlaywrightError, PlaywrightTimeoutError) as exc:
-                        if blocked_request_count:
-                            raise BrowserNavigationError(
-                                "Browser navigation was blocked by the destination safety policy.",
-                                error_code="unsafe_destination",
-                            ) from exc
-                        raise
-                    await self._wait_for_quiet_page(page)
-
-                    if len(redirects) > self._settings.max_redirects:
-                        raise BrowserNavigationError(
-                            "Redirect limit exceeded during browser navigation.",
-                            error_code="redirect_limit_exceeded",
-                        )
-
-                    html = await page.content()
-                    limited_html, html_size_bytes, html_truncated = self._limit_html(html)
-                    html_path = self._write_text_artifact(
-                        directory=self._settings.html_dir,
-                        artifact_id=artifact_id,
-                        suffix=".html",
-                        content=limited_html,
-                    )
-                    screenshot_path = await self._capture_screenshot(page, artifact_id)
-
-                    return BrowserCapture(
-                        final_url=page.url,
-                        redirects=redirects,
-                        status_code=response.status if response is not None else None,
-                        html_path=str(html_path),
-                        html_size_bytes=html_size_bytes,
-                        html_truncated=html_truncated,
-                        screenshot_path=str(screenshot_path),
-                        blocked_request_count=blocked_request_count,
-                    )
-                finally:
-                    await browser.close()
+            if _loop_can_spawn_subprocess(asyncio.get_running_loop()):
+                return await self._capture_with_browser(url, artifact_id)
+            return await asyncio.to_thread(self._capture_on_proactor_loop, url, artifact_id)
         except BrowserCaptureError:
             raise
         except (PlaywrightError, PlaywrightTimeoutError) as exc:
             raise map_playwright_error(exc) from exc
+
+    def _capture_on_proactor_loop(self, url: str, artifact_id: str) -> BrowserCapture:
+        return asyncio.run(
+            self._capture_with_browser(url, artifact_id),
+            loop_factory=_proactor_event_loop,
+        )
+
+    async def _capture_with_browser(self, url: str, artifact_id: str) -> BrowserCapture:
+        redirects: list[BrowserRedirect] = []
+        blocked_request_count = 0
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.launch(
+                headless=self._settings.playwright_headless,
+            )
+            try:
+                context = await browser.new_context(
+                    accept_downloads=False,
+                    ignore_https_errors=True,
+                    java_script_enabled=True,
+                    service_workers="block",
+                    user_agent=(
+                        "ClickSafe/0.1 security scanner "
+                        "(Playwright; compatible; phishing analysis)"
+                    ),
+                    viewport={"width": 1365, "height": 768},
+                )
+                context.set_default_timeout(self._settings.browser_timeout_ms)
+                context.set_default_navigation_timeout(self._settings.browser_timeout_ms)
+
+                async def guard_request(route: Route, request: Request) -> None:
+                    nonlocal blocked_request_count
+                    if not _is_http_url(request.url):
+                        await route.continue_()
+                        return
+                    try:
+                        await self._validate_destination(request.url)
+                    except BrowserNavigationError:
+                        blocked_request_count += 1
+                        await route.abort("blockedbyclient")
+                        return
+                    await route.continue_()
+
+                await context.route("**/*", guard_request)
+
+                page = await context.new_page()
+                page.on("response", lambda response: self._record_redirect(response, redirects))
+                try:
+                    response = await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=self._settings.browser_timeout_ms,
+                    )
+                except (PlaywrightError, PlaywrightTimeoutError) as exc:
+                    if blocked_request_count:
+                        raise BrowserNavigationError(
+                            "Browser navigation was blocked by the destination safety policy.",
+                            error_code="unsafe_destination",
+                        ) from exc
+                    raise
+                await self._wait_for_quiet_page(page)
+
+                if len(redirects) > self._settings.max_redirects:
+                    raise BrowserNavigationError(
+                        "Redirect limit exceeded during browser navigation.",
+                        error_code="redirect_limit_exceeded",
+                    )
+
+                html = await page.content()
+                limited_html, html_size_bytes, html_truncated = self._limit_html(html)
+                html_path = self._write_text_artifact(
+                    directory=self._settings.html_dir,
+                    artifact_id=artifact_id,
+                    suffix=".html",
+                    content=limited_html,
+                )
+                screenshot_path = await self._capture_screenshot(page, artifact_id)
+
+                return BrowserCapture(
+                    final_url=page.url,
+                    redirects=redirects,
+                    status_code=response.status if response is not None else None,
+                    html_path=str(html_path),
+                    html_size_bytes=html_size_bytes,
+                    html_truncated=html_truncated,
+                    screenshot_path=str(screenshot_path),
+                    blocked_request_count=blocked_request_count,
+                )
+            finally:
+                await browser.close()
 
     async def _wait_for_quiet_page(self, page: Page) -> None:
         try:
