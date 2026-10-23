@@ -303,9 +303,9 @@ clickSafe/
 
 The active runtime bundle is
 `backend/src/clicksafe/infrastructure/ml/models/structured_url_model.joblib`. The previous TF-IDF
-file `model.joblib` remains beside it. The older training project is no longer in this repository.
-Copies of its dataset, model, and scripts are in `archive/previous_ml/`. The current dataset,
-generator, and trainer live in `ml_data/` and `scripts/`.
+file `model.joblib` remains beside it. The older training project and its archive copies are
+no longer in this repository. The current dataset, generator, and trainer live in `ml_data/`
+and `scripts/`.
 
 ## API Contract
 

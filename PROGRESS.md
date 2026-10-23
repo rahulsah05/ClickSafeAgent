@@ -207,7 +207,7 @@ Two pieces exist as code and are **not** called by `AnalysisService`:
 - **Payment analyzer** (`backend/src/clicksafe/analyzers/payment.py`). It is a placeholder for payment or wallet clues. The default analyzer list does not include it.
 - **Agent planner** (`backend/src/clicksafe/application/agent/`). It is an unused experiment. It is not part of the scan you get from the website.
 
-The older training app has been removed. Its `model.joblib` is still in the package, and the scan now uses the structured URL bundle instead. Copies of the old dataset, model, and scripts are in `archive/previous_ml/`.
+The older training app and its archive copies have been removed. Its `model.joblib` is still in the package, and the scan now uses the structured URL bundle instead.
 
 ## Safety rules already in place
 

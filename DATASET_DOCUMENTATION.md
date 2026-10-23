@@ -14,9 +14,8 @@ The scan uses the structured model trained from this file. This file does not by
 | `scripts/generate_synthetic_dataset.py` | Reproducible generator |
 | `ml_data/url_dataset.csv` | Generated dataset |
 | `ml_data/url_dataset.meta.json` | Counts and SHA-256 for this run |
-| `archive/previous_ml/` | Copies of the previous dataset, model, and scripts |
 
-The CSV is under `ml_data/` because the repository gitignore ignores `data/`. Copies of the older training files are in `archive/previous_ml/`.
+The CSV is under `ml_data/` because the repository gitignore ignores `data/`.
 
 ## Regenerate
 
@@ -248,16 +247,7 @@ The chosen component is the hostname label, or hyphen-separated piece of a label
 
 Numeric substitutions use one changed letter for suspicious rows and at least two for malicious rows. `rn` for `m` is included so a double letter is not always treated as `nn` for `m`. Spelling changes cover insertion, deletion, transposition, and a repeated letter. Unicode rows use the confusable table above, either as raw Unicode or as punycode. Domain-structure rows move the brand into a subdomain, glue digits or a hyphen onto it, or build a deep hyphenated generic host. Keyword rows use the lure list in the path, the query, or the hostname. Combined rows use at least two of those families plus a lure. Benign rows include exact brand hosts, third-party mentions, and noisy generic URLs.
 
-## Archive of the previous project
-
-`archive/previous_ml/` holds byte-for-byte copies of:
-
-- `synthetic_dataset.csv` (the old 100,000-row `good`/`bad` file)
-- `model.joblib` (the TF-IDF plus logistic regression pipeline)
-- `generate_dataset.py`
-- `train_model.py`
-
-`archive/previous_ml/SHA256SUMS.txt` records the hashes. The previous model file at `backend/src/clicksafe/infrastructure/ml/models/model.joblib` was not changed. Its hash matches the archived `model.joblib` (`717888c0c9216e3c…`). The scan uses the structured bundle instead.
+The previous TF-IDF model file remains at `backend/src/clicksafe/infrastructure/ml/models/model.joblib`. The scan uses the structured bundle instead.
 
 ## Prediction-time features
 
