@@ -26,6 +26,10 @@ class JsonFormatter(logging.Formatter):
             "http_path",
             "http_status_code",
             "duration_ms",
+            "openai_error_category",
+            "openai_error_type",
+            "openai_status_code",
+            "openai_error_code",
         ):
             value = getattr(record, field_name, None)
             if value is not None:

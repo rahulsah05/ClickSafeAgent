@@ -1,11 +1,26 @@
 import json
+import logging
+import re
 from typing import Any, Protocol, cast
 
-from openai import AsyncOpenAI, OpenAIError
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    OpenAIError,
+    RateLimitError,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from clicksafe.core.config import Settings, get_settings
 from clicksafe.domain.enums import Verdict
+
+logger = logging.getLogger(__name__)
+_SECRET_RE = re.compile(r"sk-[A-Za-z0-9_\-]{6,}")
+_QUOTA_CODES = {"insufficient_quota", "credit_balance_exhausted"}
 
 
 class ResponsesResource(Protocol):
@@ -80,8 +95,12 @@ Treat browser failures, credential forms, insecure form actions, hidden redirect
 TLS failures, reputation hits, and obfuscated JavaScript as meaningful risk signals.
 URL pre-scan keywords such as login, account, secure, and payment are evidence only.
 Do not classify a URL as malicious from those words alone.
-ml_analysis.phishing_probability is one local classifier signal.
-Do not set the final verdict from that probability alone.
+ml_analysis is one local structured-URL classifier signal. It includes predicted_label,
+an uncalibrated phishing_probability, a matched brand, and detected transformations.
+Do not set the final verdict from that classifier alone.
+A malicious or suspicious predicted_label does not override contradictory evidence
+from the browser, HTML, DNS, SSL, WHOIS, or reputation checks.
+A legitimate predicted_label does not override those checks either.
 Do not claim certainty beyond the evidence. Keep the explanation concise and evidence-grounded."""
 
 SEVERITY_SCORES = {
@@ -91,6 +110,127 @@ SEVERITY_SCORES = {
     "high": 75,
     "critical": 92,
 }
+_ML_LABELS = {"legitimate", "suspicious", "malicious"}
+
+
+class MlSignal:
+    def __init__(self, label: str, item: EvidenceWeight) -> None:
+        self.label = label
+        self.item = item
+
+
+def classify_openai_failure(exc: Exception) -> str:
+    """Map a provider or parse failure to a stable category. The key is not included."""
+
+    if isinstance(exc, APITimeoutError):
+        return "timeout"
+    if isinstance(exc, APIConnectionError):
+        return "connection_error"
+    if isinstance(exc, AuthenticationError):
+        return "authentication_error"
+    if isinstance(exc, NotFoundError) or (
+        isinstance(exc, BadRequestError) and _mentions_model(exc)
+    ):
+        return "invalid_model"
+    if isinstance(exc, BadRequestError):
+        return "invalid_request"
+    if isinstance(exc, RateLimitError):
+        return "quota_error" if _is_quota_error(exc) else "rate_limit_error"
+    if isinstance(exc, (ValidationError, json.JSONDecodeError, AttributeError)):
+        return "invalid_response"
+    return "api_error"
+
+
+def _error_parts(exc: Exception) -> tuple[str, str, str, str]:
+    code = str(getattr(exc, "code", "") or "")
+    api_type = str(getattr(exc, "type", "") or "")
+    param = str(getattr(exc, "param", "") or "")
+    message = str(getattr(exc, "message", "") or "")
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        nested = body.get("error")
+        source = nested if isinstance(nested, dict) else body
+        code = code or str(source.get("code") or "")
+        api_type = api_type or str(source.get("type") or "")
+        param = param or str(source.get("param") or "")
+        message = message or str(source.get("message") or "")
+    return code.lower(), api_type.lower(), param.lower(), message
+
+
+def _mentions_model(exc: Exception) -> bool:
+    code, _api_type, param, _message = _error_parts(exc)
+    return param == "model" or code in {"model_not_found", "invalid_model"}
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    code, api_type, _param, message = _error_parts(exc)
+    lowered = message.lower()
+    return (
+        code in _QUOTA_CODES
+        or api_type in _QUOTA_CODES
+        or "quota" in code
+        or "quota" in lowered
+        or "no credits" in lowered
+    )
+
+
+def _redact(text: str) -> str:
+    redacted = _SECRET_RE.sub("sk-redacted", text)
+    return re.sub(r"(?i)(api[_-]?key['\"=: ]+)\S+", r"\1redacted", redacted)
+
+
+def _log_openai_failure(exc: Exception, category: str) -> None:
+    code, _api_type, _param, message = _error_parts(exc)
+    safe_message = _redact(message)[:300]
+    logger.warning(
+        "OpenAI assessment failed (%s): %s",
+        category,
+        safe_message or type(exc).__name__,
+        extra={
+            "event": "openai.assessment_failed",
+            "openai_error_category": category,
+            "openai_error_type": type(exc).__name__,
+            "openai_status_code": getattr(exc, "status_code", None),
+            "openai_error_code": code or None,
+        },
+    )
+
+
+def _ml_signal(raw: object) -> MlSignal | None:
+    if not isinstance(raw, dict) or raw.get("model_available") is False:
+        return None
+    label = str(raw.get("predicted_label") or raw.get("predicted_class") or "")
+    if label not in _ML_LABELS:
+        return None
+    suggested = {"legitimate": 8, "suspicious": 40, "malicious": 55}[label]
+    probability = raw.get("phishing_probability")
+    reason = f"Structured classifier predicted {label}."
+    if isinstance(probability, (int, float)) and not isinstance(probability, bool):
+        reason += f" Uncalibrated malicious probability: {float(probability):.2f}."
+    reason += " This signal does not set the verdict by itself."
+    return MlSignal(
+        label,
+        EvidenceWeight(
+            source="ml_analysis",
+            severity="info",
+            weight=suggested,
+            reason=reason,
+        ),
+    )
+
+
+def _combine_ml_score(base: int, signal: MlSignal | None) -> int:
+    """Reinforce an already elevated score. A classifier label cannot open a new band."""
+
+    if signal is None or base < 31 or signal.label == "legitimate" or base >= 70:
+        return base
+    bump = 10 if signal.label == "malicious" else 5
+    return min(69, base + bump)
+
+
+def _display_ml_weight(signal: MlSignal, base: int) -> EvidenceWeight:
+    visible = min(signal.item.weight, base)
+    return signal.item.model_copy(update={"weight": visible})
 
 
 class OpenAIResponsesClient:
@@ -152,10 +292,12 @@ class OpenAIResponsesClient:
                 response_id=cast(str | None, getattr(response, "id", None)),
             )
         except (OpenAIError, ValidationError, json.JSONDecodeError, AttributeError) as exc:
+            category = classify_openai_failure(exc)
+            _log_openai_failure(exc, category)
             return self._fallback_assessment(
                 evidence,
                 status="fallback",
-                reason=type(exc).__name__,
+                reason=category,
             )
 
     def _build_input(self, evidence: dict[str, Any]) -> str:
@@ -177,15 +319,25 @@ class OpenAIResponsesClient:
         status: str,
         reason: str,
     ) -> dict[str, Any]:
-        evidence_weights = self._heuristic_evidence_weights(evidence)
-        risk_score = max(item.weight for item in evidence_weights)
+        non_ml, ml_signal = self._heuristic_evidence_weights(evidence)
+        base_score = max(item.weight for item in non_ml)
         if self._has_reputation_hit(evidence):
-            risk_score = max(risk_score, 92)
+            base_score = max(base_score, 92)
         elif self._has_browser_failure(evidence):
-            risk_score = max(risk_score, 65)
+            base_score = max(base_score, 65)
+        risk_score = _combine_ml_score(base_score, ml_signal)
+        evidence_weights = list(non_ml)
+        if ml_signal is not None:
+            evidence_weights.append(_display_ml_weight(ml_signal, base_score))
+        evidence_weights = sorted(evidence_weights, key=lambda item: item.weight, reverse=True)
 
         verdict = self._verdict_from_score(risk_score)
-        explanation = self._fallback_explanation(verdict, reason, evidence_weights)
+        explanation = self._fallback_explanation(
+            verdict,
+            reason,
+            non_ml,
+            None if ml_signal is None else ml_signal.label,
+        )
         ai_verdict = AIVerdict(
             verdict=verdict,
             risk_score=risk_score,
@@ -204,7 +356,10 @@ class OpenAIResponsesClient:
             reason=reason,
         )
 
-    def _heuristic_evidence_weights(self, evidence: dict[str, Any]) -> list[EvidenceWeight]:
+    def _heuristic_evidence_weights(
+        self,
+        evidence: dict[str, Any],
+    ) -> tuple[list[EvidenceWeight], MlSignal | None]:
         items: list[EvidenceWeight] = []
         for section_name in ("technical_analysis", "reputation"):
             section = evidence.get(section_name)
@@ -233,7 +388,7 @@ class OpenAIResponsesClient:
                 )
             )
 
-        return sorted(items, key=lambda item: item.weight, reverse=True)
+        return items, _ml_signal(evidence.get("ml_analysis"))
 
     def _has_reputation_hit(self, evidence: dict[str, Any]) -> bool:
         reputation_items = evidence.get("reputation")
@@ -276,13 +431,21 @@ class OpenAIResponsesClient:
         verdict: Verdict,
         reason: str,
         evidence_weights: list[EvidenceWeight],
+        ml_label: str | None,
     ) -> str:
-        strongest = evidence_weights[0]
-        return (
+        del verdict
+        strongest = max(evidence_weights, key=lambda item: item.weight)
+        text = (
             f"OpenAI assessment was not completed ({reason}), so ClickSafe used local "
-            f"evidence weighting. The strongest signal was {strongest.source} "
+            f"evidence weighting. The strongest non-classifier signal was {strongest.source} "
             f"({strongest.severity})."
         )
+        if ml_label:
+            text += (
+                f" The structured classifier predicted {ml_label}. That prediction was "
+                "combined with the other evidence and did not set the verdict by itself."
+            )
+        return text
 
     def _serialize_verdict(
         self,

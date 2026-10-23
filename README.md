@@ -5,8 +5,10 @@ ClickSafe is an AI-powered phishing detection application. The finished product 
 This repository is currently at Phase 8: the complete URL-analysis pipeline and dashboard are
 implemented, with request throttling, body-size limits, structured JSON logs, SSRF protections,
 browser-level dashboard coverage, and deployment guidance added for hardening. Two later checks,
-a local URL pre-scan and a local phishing classifier, now run before that pipeline as evidence
-only. A beginner-friendly snapshot of what is finished is in [PROGRESS.md](PROGRESS.md).
+a local URL pre-scan and a structured URL classifier, now run before that pipeline as evidence
+only. The classifier does not set the Safe, Suspicious, or Malicious verdict. A beginner-friendly
+snapshot of what is finished is in [PROGRESS.md](PROGRESS.md). Dataset and model notes are in
+[DATASET_DOCUMENTATION.md](DATASET_DOCUMENTATION.md) and [MODEL_EVALUATION.md](MODEL_EVALUATION.md).
 
 ## Stack
 
@@ -57,10 +59,32 @@ Configure the rate and body controls with `ANALYSIS_RATE_LIMIT_*` and `MAX_REQUE
 Google Safe Browsing is licensed for non-commercial use. A commercial deployment should use
 [Google Web Risk](https://cloud.google.com/web-risk) instead.
 
+## Structured URL model
+
+The scan loads `backend/src/clicksafe/infrastructure/ml/models/structured_url_model.joblib`.
+Training output is `models/structured_url_model.joblib`. The previous TF-IDF file
+`backend/src/clicksafe/infrastructure/ml/models/model.joblib` stays in place and is not the
+active prediction call.
+
+Regenerate the synthetic dataset, train, and replay the saved test labels from the repository
+root with the backend interpreter:
+
+```powershell
+backend\venv\Scripts\python.exe scripts\generate_synthetic_dataset.py --rows 10000 --seed 20261015
+backend\venv\Scripts\python.exe scripts\train_structured_model.py --seed 20261015
+backend\venv\Scripts\python.exe scripts\evaluate_structured_model.py
+```
+
+Run the API from `backend`. Settings load `backend/.env` from that file's path, and the SQLite URL is still relative to the working directory:
+
+```powershell
+.\venv\Scripts\uvicorn.exe clicksafe.main:app --reload --host 127.0.0.1 --port 8000 --app-dir src
+```
+
 ## Current Endpoints
 
 - `GET /api/v1/health` returns service health metadata.
-- `POST /api/v1/analyze` validates and normalizes a URL, applies destination and rate-limit policy, persists an analysis job, runs browser capture, technical/reputation checks, AI verdict generation, and returns the current Phase 8 job payload.
+- `POST /api/v1/analyze` validates and normalizes a URL, applies destination and rate-limit policy, persists an analysis job, runs the URL pre-scan and structured URL classifier as evidence, then browser capture, technical/reputation checks, and AI verdict generation. It returns the current Phase 8 job payload. The classifier does not set the verdict.
 - The analysis payload includes browser evidence, technical analyzer findings, reputation-service findings when API keys are configured, and an `ai` verdict block.
 - `GET /api/v1/analyses` returns recent persisted analysis jobs.
 - `GET /api/v1/analyses/{analysis_id}` returns a persisted analysis job by ID.

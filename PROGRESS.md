@@ -120,23 +120,17 @@ Words such as `login` or `payment` are listed, then ignored by the score. Their 
 Files:
 
 - `backend/src/clicksafe/application/services/ml_phishing_service.py`
-- `backend/src/clicksafe/infrastructure/ml/phishing_classifier.py`
-- `backend/src/clicksafe/infrastructure/ml/models/model.joblib`
+- `backend/src/clicksafe/infrastructure/ml/structured_url_classifier.py`
+- `backend/src/clicksafe/infrastructure/ml/structured_url_features.py`
+- `backend/src/clicksafe/infrastructure/ml/models/structured_url_model.joblib`
 
-This is a saved scikit-learn model: TF-IDF (it turns link text into word counts) plus logistic regression (it turns those counts into a probability). It was trained earlier in `previous_ml_project` and copied in. It was not retrained here.
+This is a saved scikit-learn model. It reads structured measurements of the link, such as brand lookalikes, keywords, and host shape, and logistic regression turns those measurements into a label. The labels are `legitimate`, `suspicious`, and `malicious`. The number beside the label is an uncalibrated probability, not a calibrated risk score.
 
-It scores only the raw link text. The pre-scan’s structured features are saved beside it, but they are not fed into the model.
-
-The dashboard calls this block **ML analysis** and says it is not the final verdict. You will see:
-
-- phishing probability
-- a class of `legitimate` or `phishing`
-- the model name `LogisticRegression`
-- up to 24 link tokens the model recognized
+The dashboard calls this block **ML analysis** and says it is not the final verdict. You will see the prediction, the matched brand, the transformations the model noticed, and a short explanation. Older saved scans that used the previous text model still display.
 
 If the model file is missing or broken, the scan continues and this block says the model was unavailable.
 
-The model learned a simple training pattern, so it can call an ordinary keyword-heavy link “phishing.” That is why its number is a clue, not the answer. Reputation lists can still mark a link Malicious when this model says legitimate. That happened on Google’s own Safe Browsing test pages: the model scored them as legitimate, and the reputation lists still produced Malicious with a risk score of 92.
+The model’s number is a clue, not the answer. The browser, page checks, DNS, SSL, WHOIS, and reputation lists still run. A reputation hit can still mark a link Malicious when this model says legitimate. The previous text model, which remains in `model.joblib` and is no longer the scan model, scored Google’s official Safe Browsing test pages as legitimate while those reputation lists still produced Malicious with a risk score of 92.
 
 ### 3. A false alarm in the JavaScript check
 
@@ -184,7 +178,7 @@ clickSafe/
 │       ├── infrastructure/      browser, database, AI, model, reputation
 │       └── main.py              starts the server
 ├── docs/              architecture and deployment notes
-├── previous_ml_project/   older experiment that produced the model file
+├── ml_data/           URL dataset used to train the structured model
 ├── README.md          how to install and run
 ├── ROADMAP.md         the eight phases
 └── PROGRESS.md        this page
@@ -213,7 +207,7 @@ Two pieces exist as code and are **not** called by `AnalysisService`:
 - **Payment analyzer** (`backend/src/clicksafe/analyzers/payment.py`). It is a placeholder for payment or wallet clues. The default analyzer list does not include it.
 - **Agent planner** (`backend/src/clicksafe/application/agent/`). It is an unused experiment. It is not part of the scan you get from the website.
 
-`previous_ml_project/` is the older app that trained the model. The current website and server do not run that app. The useful piece that moved forward is `model.joblib`.
+The older training app has been removed. Its `model.joblib` is still in the package, and the scan now uses the structured URL bundle instead. Copies of the old dataset, model, and scripts are in `archive/previous_ml/`.
 
 ## Safety rules already in place
 

@@ -4,9 +4,9 @@ import asyncio
 import logging
 from typing import Any, Protocol
 
-from clicksafe.infrastructure.ml.phishing_classifier import (
-    PhishingClassifier,
-    unavailable_prediction,
+from clicksafe.infrastructure.ml.structured_url_classifier import (
+    StructuredUrlClassifier,
+    unavailable_structured_prediction,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class PhishingPredictor(Protocol):
 
 class MlPhishingService:
     def __init__(self, classifier: PhishingPredictor | None = None) -> None:
-        self._classifier = classifier or PhishingClassifier()
+        self._classifier = classifier or StructuredUrlClassifier()
 
     async def predict_url_risk(
         self,
@@ -38,6 +38,6 @@ class MlPhishingService:
             )
         except Exception:
             logger.warning("ml.prediction_failed", extra={"event": "ml.prediction_failed"})
-            result = unavailable_prediction("ML prediction failed")
+            result = unavailable_structured_prediction("ML prediction failed")
             result["structured_feature_count"] = len(structured_features or {})
             return result

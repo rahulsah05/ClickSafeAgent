@@ -325,7 +325,18 @@ function PreScanAssessment({ assessment }: { assessment: Record<string, unknown>
 
 function MlAssessment({ assessment }: { assessment: Record<string, unknown> }) {
   const features = stringList(assessment.features_used).slice(0, 8);
+  const transformations = stringList(assessment.detected_transformations);
+  const rules = stringList(assessment.triggered_rules).slice(0, 4);
   const available = assessment.model_available !== false;
+  const signalLabel = assessment.model_version === "2.0.0" ? "Signals used" : "URL tokens used";
+  const brand =
+    typeof assessment.matched_brand === "string" && assessment.matched_brand
+      ? assessment.matched_brand
+      : "";
+  const reason =
+    typeof assessment.match_reason === "string" && assessment.match_reason
+      ? ` (${assessment.match_reason})`
+      : "";
 
   return (
     <div className="border-t border-zinc-200 pt-4 dark:border-zinc-800">
@@ -345,12 +356,34 @@ function MlAssessment({ assessment }: { assessment: Record<string, unknown> }) {
           {formatUnknown(assessment.error)}
         </p>
       )}
+      {assessment.probabilities_calibrated === false ? (
+        <p className="mt-3 text-sm leading-6 text-zinc-500 dark:text-zinc-400">
+          Class probabilities are uncalibrated. They are not the final verdict.
+        </p>
+      ) : null}
       {typeof assessment.summary === "string" ? (
         <p className="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{assessment.summary}</p>
       ) : null}
+      {brand ? (
+        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          Matched brand: {brand}{reason}
+        </p>
+      ) : null}
+      {transformations.length > 0 ? (
+        <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          Detected transformations: {transformations.join(", ")}
+        </p>
+      ) : null}
+      {rules.length > 0 ? (
+        <ul className="mt-2 space-y-1 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
+          {rules.map((rule) => (
+            <li key={rule}>{rule}</li>
+          ))}
+        </ul>
+      ) : null}
       {features.length > 0 ? (
         <p className="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
-          URL tokens used: {features.join(", ")}
+          {signalLabel}: {features.join(", ")}
         </p>
       ) : null}
     </div>
@@ -470,7 +503,7 @@ function formatUnknown(value: unknown) {
 }
 
 function formatModel(value: unknown) {
-  if (value === "LogisticRegression") {
+  if (value === "LogisticRegression" || value === "logistic_regression") {
     return "Logistic Regression";
   }
   return formatUnknown(value);

@@ -33,6 +33,9 @@ from clicksafe.infrastructure.browser.playwright_client import (
     PlaywrightClient,
 )
 from clicksafe.infrastructure.database.repositories import AnalysisJobRepository
+from clicksafe.infrastructure.ml.structured_url_classifier import (
+    unavailable_structured_prediction,
+)
 
 
 class BrowserCaptureClient(Protocol):
@@ -330,20 +333,13 @@ class AnalysisService:
         return result
 
     def _isolated_ml(self, reason: str) -> dict[str, Any]:
-        return {
-            "phishing_probability": None,
-            "predicted_class": None,
-            "model_version": "1.0",
-            "model_type": "LogisticRegression",
-            "features_used": [],
-            "model_available": False,
-            "error": "ML prediction failed",
-            "summary": (
-                "Local ML classifier failed and was isolated from the deep analysis "
-                f"pipeline ({reason})."
-            ),
-            "structured_feature_count": 0,
-        }
+        result = unavailable_structured_prediction("ML prediction failed")
+        result["summary"] = (
+            "Local ML classifier failed and was isolated from the deep analysis "
+            f"pipeline ({reason})."
+        )
+        result["explanation"] = result["summary"]
+        return result
 
     def _run_pre_scan(self, url: str) -> dict[str, Any]:
         try:

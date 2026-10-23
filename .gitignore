@@ -16,7 +16,6 @@ backend/*.db
 backend/data/
 *.db
 .ipynb_checkpoints/
-previous_ml_project/BackEND/model/danny.unknown
 
 # Environment
 .env

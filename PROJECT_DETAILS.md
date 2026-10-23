@@ -93,32 +93,40 @@ and a warning, and the rest of the scan continues.
 
 ### Local Phishing Classifier
 
-`MlPhishingService` calls the saved model in
-`backend/src/clicksafe/infrastructure/ml/models/model.joblib`. The pipeline is TF-IDF plus
-logistic regression, pinned to scikit-learn `>=1.7.2,<1.8`. It was trained earlier on raw URL
-text and copied into this backend. It was not retrained here.
+`MlPhishingService` calls `StructuredUrlClassifier`. The saved bundle is
+`backend/src/clicksafe/infrastructure/ml/models/structured_url_model.joblib`, a copy of
+`models/structured_url_model.joblib`. It is a scikit-learn pipeline of an imputer, a scaler, and
+logistic regression on 24 structured URL features, model version `2.0.0`, feature schema `1.0.0`.
+scikit-learn stays pinned to `>=1.7.2,<1.8`. The training source is the synthetic dataset in
+`ml_data/url_dataset.csv`. Evaluation is in `MODEL_EVALUATION.md`.
 
-The model scores only the raw URL string. Structured pre-scan features are counted and stored,
-but they are not model inputs. Training labels `good` and `bad` are shown as `legitimate` and
-`phishing`. The stored result is `evidence.ml_analysis`:
+The classifier measures the submitted URL with `structured_url_features.py`. It does not read the
+label, the record id, or the generation method. Pre-scan feature dictionaries are not model
+inputs. Class probabilities are uncalibrated. The stored result is `evidence.ml_analysis` and
+keeps the earlier fields:
 
-- `phishing_probability`
-- `predicted_class`
-- `model_type` (`LogisticRegression`) and `model_version` (`1.0`)
-- `features_used`, up to 24 recognized URL tokens
+- `phishing_probability`, the uncalibrated probability of the `malicious` class
+- `predicted_class` and `predicted_label`: `legitimate`, `suspicious`, or `malicious`
+- `model_type` (`logistic_regression`) and `model_version` (`2.0.0`)
+- `features_used`, the detected transformation names
 - `model_available`
-- a short summary
+- `summary` and `explanation`
+- `probabilities`, `probabilities_calibrated` (`false`), `extracted_features`
+- `matched_brand`, `matched_brand_token`, `match_reason`
+- `detected_transformations` and `triggered_rules`
 
 The dashboard shows this block as **ML analysis** and states that it is not the final verdict.
-The OpenAI instructions repeat that rule: a high phishing probability is one signal and must not
-become the verdict by itself.
+The OpenAI instructions receive the same block as one evidence source. A classifier label does
+not override the browser, HTML, DNS, SSL, WHOIS, or reputation evidence. The local fallback
+scorer records `ml_analysis` and can only reinforce a score that other evidence already lifted
+out of the Safe band. A classifier label by itself does not choose the verdict.
 
 A missing, corrupt, or failing model returns `model_available: false` and an error string. The
 browser, technical, reputation, and AI steps still run.
 
-The saved model can assign a high phishing probability to an ordinary keyword-heavy URL. Read it
-beside the other evidence. Reputation checks can still produce **Malicious** when this classifier
-says legitimate.
+The previous TF-IDF pipeline remains at
+`backend/src/clicksafe/infrastructure/ml/models/model.joblib` and is not the active prediction
+call. Reputation checks can still produce **Malicious** when this classifier says legitimate.
 
 ### Browser Evidence Collection
 
@@ -181,8 +189,12 @@ Google Web Risk or another appropriately licensed provider.
   only and must not, by themselves, make a URL malicious.
 - Maps the fallback from the strongest technical or reputation severity: info 8, low 25, medium
   50, high 75, and critical 92. A reputation hit raises the fallback score to at least 92. A
-  failed browser capture raises it to at least 65. The same bands apply: 0–30 Safe, 31–69
-  Suspicious, and 70–100 Malicious. The result reports `fallback_used: true`.
+  failed browser capture raises it to at least 65. `ml_analysis` is included in that weighting.
+  It can add a small amount only after other evidence is already Suspicious, and it cannot raise
+  a Safe score or push a score across the Malicious line by itself. The same bands apply: 0–30
+  Safe, 31–69 Suspicious, and 70–100 Malicious. The result reports `fallback_used: true` and a
+  reason such as `quota_error`, `authentication_error`, `invalid_model`, `timeout`, or
+  `invalid_response`.
 
 ### API and Persistence
 
@@ -202,8 +214,10 @@ Google Web Risk or another appropriately licensed provider.
 - Safe, Suspicious, and Malicious verdict badges and risk-score bar.
 - Human-readable explanation, job metadata, and validation details.
 - Initial URL risk from the pre-scan, labeled as not the final verdict.
-- ML analysis from the local classifier, including probability, predicted class, model name, and
-  the same not-the-final-verdict label. An unavailable model shows its error instead.
+- ML analysis from the structured URL classifier, including the predicted label, uncalibrated
+  probability, matched brand, transformations, and the same not-the-final-verdict label. An
+  unavailable model shows its error instead. Older saved jobs that used the TF-IDF classifier
+  still render.
 - Browser-capture details, redirect timeline, final URL, and screenshot preview.
 - AI assessment details, including confidence, action, model, status, fallback state, and top
   evidence weights.
@@ -287,9 +301,11 @@ clickSafe/
 `- PROJECT_DETAILS.md         This complete project reference
 ```
 
-The runtime model file is `backend/src/clicksafe/infrastructure/ml/models/model.joblib`. The older
-training project is kept in this repository as `previous_ml_project/`. It is ordinary source now.
-It is not a nested Git repository, and the current app does not run it.
+The active runtime bundle is
+`backend/src/clicksafe/infrastructure/ml/models/structured_url_model.joblib`. The previous TF-IDF
+file `model.joblib` remains beside it. The older training project is no longer in this repository.
+Copies of its dataset, model, and scripts are in `archive/previous_ml/`. The current dataset,
+generator, and trainer live in `ml_data/` and `scripts/`.
 
 ## API Contract
 
@@ -354,7 +370,7 @@ The `evidence` object is intentionally extensible. Current top-level groups are:
 
 ## Configuration
 
-Copy the root `.env.example` to `.env` for local configuration. Do not commit real API keys.
+The running API reads `backend/.env` from that file's own path, then a repository-root `.env` if one exists. Process environment variables override both files. The checked-in template is the root `.env.example`. Do not commit real API keys.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
@@ -366,7 +382,7 @@ Copy the root `.env.example` to `.env` for local configuration. Do not commit re
 | `DATABASE_URL` | Async SQLite connection URL | `sqlite+aiosqlite:///./clicksafe.db` |
 | `SQL_ECHO` | Emit SQL statements | `false` |
 | `OPENAI_API_KEY` | Enables AI verdict generation | empty |
-| `OPENAI_MODEL` | Responses API model | `gpt-5.6` |
+| `OPENAI_MODEL` | Responses API model | `gpt-5.4-mini` |
 | `OPENAI_REASONING_EFFORT` | Model reasoning setting | `medium` |
 | `OPENAI_TIMEOUT_SECONDS` | AI request timeout | `30` |
 | `OPENAI_MAX_OUTPUT_TOKENS` | Maximum AI output tokens | `1200` |

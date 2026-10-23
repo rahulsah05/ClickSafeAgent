@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import App from "../App";
+import { ResultPanel } from "../components/ResultPanel";
 import type { AnalysisResponse } from "../types/analysis";
 
 const fetchMock = vi.fn();
@@ -209,4 +210,50 @@ test("offers retry when a persisted analysis job fails", async () => {
   fireEvent.click(screen.getByRole("button", { name: /retry scan/i }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   expect(await screen.findByText("Safe")).toBeInTheDocument();
+});
+
+test("shows structured model evidence beside a separate verdict", () => {
+  const evidence = {
+    ...(completedAnalysis.evidence as Record<string, unknown>),
+    ml_analysis: {
+      phishing_probability: 0.99,
+      predicted_class: "malicious",
+      predicted_label: "malicious",
+      model_type: "logistic_regression",
+      model_version: "2.0.0",
+      features_used: ["numeric_substitution", "suspicious_keyword"],
+      model_available: true,
+      probabilities_calibrated: false,
+      matched_brand: "PayPal",
+      match_reason: "digit_lookalike",
+      detected_transformations: ["numeric_substitution", "suspicious_keyword"],
+      triggered_rules: ["Numeric character substitutions: 1."],
+      summary: "Structured URL model predicted malicious. This is one evidence source and does not set the scan verdict."
+    }
+  };
+  render(
+    <ResultPanel
+      error={null}
+      isLoading={false}
+      onRetry={() => undefined}
+      result={{ ...completedAnalysis, evidence }}
+    />
+  );
+
+  expect(screen.getByText("Safe")).toBeInTheDocument();
+  expect(screen.getByText("Prediction: malicious")).toBeInTheDocument();
+  expect(screen.getByText("Model: Logistic Regression")).toBeInTheDocument();
+  expect(screen.getByText("Version: 2.0.0")).toBeInTheDocument();
+  expect(screen.getByText("Matched brand: PayPal (digit_lookalike)")).toBeInTheDocument();
+  expect(
+    screen.getByText("Detected transformations: numeric_substitution, suspicious_keyword")
+  ).toBeInTheDocument();
+  expect(screen.getByText("Numeric character substitutions: 1.")).toBeInTheDocument();
+  expect(screen.getByText("Signals used: numeric_substitution, suspicious_keyword")).toBeInTheDocument();
+  expect(
+    screen.getByText("Class probabilities are uncalibrated. They are not the final verdict.")
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText("Local classifier evidence. This is not the final verdict.")
+  ).toBeInTheDocument();
 });

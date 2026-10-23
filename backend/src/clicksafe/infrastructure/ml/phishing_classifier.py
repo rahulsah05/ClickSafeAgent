@@ -1,7 +1,8 @@
-"""Local loader for the existing phishing URL classifier.
+"""Loader for the previous TF-IDF phishing classifier.
 
-The saved pipeline is TF-IDF plus logistic regression, trained on raw URL text.
-Structured pre-scan features are not model inputs.
+The scan path uses StructuredUrlClassifier. This module still loads
+models/model.joblib, a TF-IDF plus logistic-regression pipeline trained on
+raw URL text. Structured pre-scan features are not inputs to that pipeline.
 """
 
 import logging

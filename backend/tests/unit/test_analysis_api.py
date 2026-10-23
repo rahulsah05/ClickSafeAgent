@@ -115,7 +115,9 @@ def test_analyze_creates_completed_phase_six_job(client: TestClient) -> None:
     assert payload["evidence"]["pre_scan"]["risk_level"] == "low"
     assert payload["evidence"]["pre_scan"]["suspicious_keywords"] == []
     assert payload["evidence"]["ml_analysis"]["model_available"] is True
-    assert payload["evidence"]["ml_analysis"]["model_type"] == "LogisticRegression"
+    assert payload["evidence"]["ml_analysis"]["model_type"] == "logistic_regression"
+    assert payload["evidence"]["ml_analysis"]["model_version"] == "2.0.0"
+    assert payload["evidence"]["ml_analysis"]["probabilities_calibrated"] is False
     assert payload["evidence"]["validation"]["valid"] is True
     assert payload["evidence"]["browser"]["captured"] is True
     assert payload["evidence"]["browser"]["final_url"] == "https://example.com/a"
@@ -169,9 +171,9 @@ def test_pre_scan_keywords_do_not_replace_the_final_verdict(client: TestClient) 
     assert set(pre_scan["suspicious_keywords"]) == {"account", "login", "payment", "secure"}
     ml_analysis = payload["evidence"]["ml_analysis"]
     assert ml_analysis["model_available"] is True
-    assert ml_analysis["predicted_class"] == "phishing"
-    assert ml_analysis["phishing_probability"] > 0.9
-    assert payload["verdict"] != "Malicious"
+    assert ml_analysis["predicted_label"] == "legitimate"
+    assert ml_analysis["phishing_probability"] < 0.05
+    assert payload["verdict"] == "Safe"
     assert payload["evidence"]["technical_analysis"][0]["source"] == "fake_technical"
     assert payload["evidence"]["reputation"][0]["source"] == "fake_reputation"
     assert payload["evidence"]["ai"]["fallback_used"] is True
@@ -231,6 +233,26 @@ def test_ml_failure_does_not_stop_deep_analysis(
     assert payload["evidence"]["ml_analysis"]["error"] == "ML prediction failed"
 
 
+def test_malicious_ml_evidence_does_not_replace_the_final_verdict(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/analyze",
+        json={"url": "https://login-google-456.xyz/security"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    ml_analysis = payload["evidence"]["ml_analysis"]
+    assert payload["status"] == "completed"
+    assert payload["verdict"] == "Safe"
+    assert payload["risk_score"] == 8
+    assert ml_analysis["predicted_label"] == "malicious"
+    assert ml_analysis["phishing_probability"] > 0.9
+    assert ml_analysis["probabilities_calibrated"] is False
+    assert payload["evidence"]["technical_analysis"][0]["source"] == "fake_technical"
+    assert payload["evidence"]["reputation"][0]["source"] == "fake_reputation"
+    assert payload["evidence"]["ai"]["fallback_used"] is True
+
+
 def test_legitimate_ml_evidence_does_not_replace_the_final_verdict(client: TestClient) -> None:
     response = client.post("/api/v1/analyze", json={"url": "https://google.com/123"})
 
@@ -241,7 +263,11 @@ def test_legitimate_ml_evidence_does_not_replace_the_final_verdict(client: TestC
     assert payload["verdict"] == "Safe"
     assert payload["risk_score"] == 8
     assert ml_analysis["predicted_class"] == "legitimate"
+    assert ml_analysis["predicted_label"] == "legitimate"
     assert ml_analysis["phishing_probability"] < 0.05
+    assert ml_analysis["probabilities_calibrated"] is False
+    assert ml_analysis["matched_brand"] == "Google"
+    assert "label" not in ml_analysis["extracted_features"]
     assert payload["evidence"]["ai"]["provider"] == "openai_responses"
 
 

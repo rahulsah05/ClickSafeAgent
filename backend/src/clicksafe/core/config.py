@@ -1,8 +1,16 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# config.py lives at backend/src/clicksafe/core/config.py.
+_BACKEND_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILES = (
+    _BACKEND_ROOT / ".env",
+    _BACKEND_ROOT.parent / ".env",
+)
 
 
 class Settings(BaseSettings):
@@ -16,7 +24,7 @@ class Settings(BaseSettings):
     sql_echo: bool = False
 
     openai_api_key: str = ""
-    openai_model: str = "gpt-5.6"
+    openai_model: str = "gpt-5.4-mini"
     openai_reasoning_effort: Literal["minimal", "low", "medium", "high"] = "medium"
     openai_timeout_seconds: float = Field(default=30.0, ge=5.0, le=120.0)
     openai_max_output_tokens: int = Field(default=1_200, ge=256, le=4_000)
@@ -42,7 +50,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"),
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
